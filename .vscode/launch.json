@@ -1,0 +1,57 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run connect (by address)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/connect",
+            "args": ["-a", "${input:cameraAddress}"],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "Build connect"
+        },
+        {
+            "name": "Run capture (by address)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/capture",
+            "args": ["-a", "${input:cameraAddress}", "-o", "${input:outputDir}", "-e", "${input:encodeFormat}", "-x", "${input:exposureUs}", "-b", "${input:binning}"],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "Build capture"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "cameraAddress",
+            "type": "promptString",
+            "description": "Camera IP address (e.g. 192.168.1.100)",
+            "default": "192.168.1.100"
+        },
+        {
+            "id": "outputDir",
+            "type": "promptString",
+            "description": "Output directory for captured images",
+            "default": "captures"
+        },
+        {
+            "id": "encodeFormat",
+            "type": "pickString",
+            "description": "Output image format",
+            "options": ["pgm", "png", "jpg"],
+            "default": "pgm"
+        },
+        {
+            "id": "exposureUs",
+            "type": "promptString",
+            "description": "Exposure time in microseconds (e.g. 20000 = 20 ms). Leave 0 to use camera default.",
+            "default": "20000"
+        },
+        {
+            "id": "binning",
+            "type": "pickString",
+            "description": "Sensor binning factor",
+            "options": ["1", "2"],
+            "default": "1"
+        }
+    ]
+}

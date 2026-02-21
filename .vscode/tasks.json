@@ -1,0 +1,68 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build all",
+            "type": "shell",
+            "command": "make",
+            "args": ["all"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "Build connect",
+            "type": "shell",
+            "command": "make",
+            "args": ["bin/connect"],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "Build capture",
+            "type": "shell",
+            "command": "make",
+            "args": ["bin/capture"],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "Build capture_debug",
+            "type": "shell",
+            "command": "make",
+            "args": ["bin/capture_debug"],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "Clean",
+            "type": "shell",
+            "command": "make",
+            "args": ["clean"],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

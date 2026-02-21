@@ -20,6 +20,14 @@
 #include <string.h>
 #include <time.h>
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "../vendor/stb_image_write.h"
+#pragma GCC diagnostic pop
+
+typedef enum { ENC_PGM, ENC_PNG, ENC_JPG } EncFormat;
+
 static const char *
 interface_ipv4_address (const char *iface_name)
 {
@@ -110,14 +118,17 @@ print_usage (const char *prog)
 {
     fprintf (stderr,
              "Usage:\n"
-             "  %s -s <serial>  [-i <interface>] [-o <output_dir>]\n"
-             "  %s -a <address> [-i <interface>] [-o <output_dir>]\n"
+             "  %s -s <serial>  [-i <interface>] [-o <output_dir>] [-e <format>]\n"
+             "  %s -a <address> [-i <interface>] [-o <output_dir>] [-e <format>]\n"
              "\n"
              "Options:\n"
              "  -s, --serial     <serial>    match by serial number (uses discovery)\n"
              "  -a, --address    <address>   connect directly by camera IP\n"
              "  -i, --interface  <iface>     force Aravis NIC selection (ARV_INTERFACE)\n"
-             "  -o, --output     <dir>       output directory (default: .)\n",
+             "  -o, --output     <dir>       output directory (default: .)\n"
+             "  -e, --encode     <format>    output format: png or jpg (default: pgm)\n"
+             "  -x, --exposure   <us>        exposure time in microseconds (default: camera default)\n"
+             "  -b, --binning    <1|2>       sensor binning factor (default: 1)\n",
              prog, prog);
 }
 
@@ -145,6 +156,19 @@ try_set_integer_feature (ArvDevice *device, const char *name, gint64 value)
         g_clear_error (&error);
     } else {
         printf ("  %s = %" G_GINT64_FORMAT "\n", name, value);
+    }
+}
+
+static void
+try_set_float_feature (ArvDevice *device, const char *name, double value)
+{
+    GError *error = NULL;
+    arv_device_set_float_feature_value (device, name, value, &error);
+    if (error) {
+        fprintf (stderr, "warn: failed to set %s=%g: %s\n", name, value, error->message);
+        g_clear_error (&error);
+    } else {
+        printf ("  %s = %g\n", name, value);
     }
 }
 
@@ -191,12 +215,94 @@ write_pgm (const char *path, const guint8 *data, guint width, guint height)
     return EXIT_SUCCESS;
 }
 
+/*
+ * Bilinear debayer for BayerRG8 (RGGB pattern):
+ *   even row, even col = R
+ *   even row, odd  col = G
+ *   odd  row, even col = G
+ *   odd  row, odd  col = B
+ *
+ * Output: interleaved RGB, 3 bytes per pixel, row-major.
+ */
+static void
+debayer_rg8_to_rgb (const guint8 *bayer, guint8 *rgb, guint width, guint height)
+{
+    for (guint y = 0; y < height; y++) {
+        for (guint x = 0; x < width; x++) {
+            /* clamp-to-edge sample */
+#define B(dx, dy) ((int) bayer[ \
+    (guint) CLAMP ((int)(y) + (dy), 0, (int)(height) - 1) * (width) + \
+    (guint) CLAMP ((int)(x) + (dx), 0, (int)(width)  - 1)])
+
+            int r, g, b;
+            int ye = ((y & 1) == 0);
+            int xe = ((x & 1) == 0);
+
+            if (ye && xe) {           /* R pixel */
+                r = B( 0,  0);
+                g = (B(-1, 0) + B(1, 0) + B( 0,-1) + B(0, 1)) / 4;
+                b = (B(-1,-1) + B(1,-1) + B(-1, 1) + B(1, 1)) / 4;
+            } else if (ye && !xe) {   /* G on R row */
+                r = (B(-1, 0) + B(1, 0)) / 2;
+                g = B( 0,  0);
+                b = (B( 0,-1) + B(0, 1)) / 2;
+            } else if (!ye && xe) {   /* G on B row */
+                r = (B( 0,-1) + B(0, 1)) / 2;
+                g = B( 0,  0);
+                b = (B(-1, 0) + B(1, 0)) / 2;
+            } else {                  /* B pixel */
+                r = (B(-1,-1) + B(1,-1) + B(-1, 1) + B(1, 1)) / 4;
+                g = (B(-1, 0) + B(1, 0) + B( 0,-1) + B(0, 1)) / 4;
+                b = B( 0,  0);
+            }
+
+#undef B
+            size_t idx = ((size_t) y * width + x) * 3;
+            rgb[idx + 0] = (guint8) r;
+            rgb[idx + 1] = (guint8) g;
+            rgb[idx + 2] = (guint8) b;
+        }
+    }
+}
+
+/*
+ * Debayer a BayerRG8 frame and encode to PNG or JPEG.
+ * JPEG quality is fixed at 90.
+ */
+static int
+write_color_image (EncFormat enc, const char *path,
+                   const guint8 *bayer, guint width, guint height)
+{
+    guint8 *rgb = g_malloc ((size_t) width * (size_t) height * 3);
+    if (!rgb) {
+        fprintf (stderr, "error: out of memory for debayer buffer\n");
+        return EXIT_FAILURE;
+    }
+
+    debayer_rg8_to_rgb (bayer, rgb, width, height);
+
+    int ok;
+    if (enc == ENC_PNG)
+        ok = stbi_write_png (path, (int) width, (int) height, 3, rgb, (int) width * 3);
+    else
+        ok = stbi_write_jpg (path, (int) width, (int) height, 3, rgb, 90);
+
+    g_free (rgb);
+
+    if (!ok) {
+        fprintf (stderr, "error: failed to write '%s'\n", path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
 static int
 write_dual_bayer_pair (const char *output_dir,
                        const char *basename_no_ext,
                        const guint8 *interleaved,
                        guint width,
-                       guint height)
+                       guint height,
+                       EncFormat enc)
 {
     if (width % 2 != 0) {
         fprintf (stderr, "error: DualBayer frame width must be even, got %u\n", width);
@@ -216,7 +322,7 @@ write_dual_bayer_pair (const char *output_dir,
 
     for (guint y = 0; y < height; y++) {
         const guint8 *row = interleaved + ((size_t) y * (size_t) width);
-        guint8 *lrow = left + ((size_t) y * (size_t) sub_w);
+        guint8 *lrow = left  + ((size_t) y * (size_t) sub_w);
         guint8 *rrow = right + ((size_t) y * (size_t) sub_w);
         for (guint x = 0; x < sub_w; x++) {
             lrow[x] = row[2 * x];
@@ -224,16 +330,23 @@ write_dual_bayer_pair (const char *output_dir,
         }
     }
 
-    char *left_name = g_strdup_printf ("%s_left.pgm", basename_no_ext);
-    char *right_name = g_strdup_printf ("%s_right.pgm", basename_no_ext);
-    char *left_path = g_build_filename (output_dir, left_name, NULL);
+    const char *ext = (enc == ENC_PNG) ? "png" : (enc == ENC_JPG) ? "jpg" : "pgm";
+    char *left_name  = g_strdup_printf ("%s_left.%s",  basename_no_ext, ext);
+    char *right_name = g_strdup_printf ("%s_right.%s", basename_no_ext, ext);
+    char *left_path  = g_build_filename (output_dir, left_name,  NULL);
     char *right_path = g_build_filename (output_dir, right_name, NULL);
 
-    int rc_left = write_pgm (left_path, left, sub_w, height);
-    int rc_right = write_pgm (right_path, right, sub_w, height);
+    int rc_left, rc_right;
+    if (enc == ENC_PGM) {
+        rc_left  = write_pgm (left_path,  left,  sub_w, height);
+        rc_right = write_pgm (right_path, right, sub_w, height);
+    } else {
+        rc_left  = write_color_image (enc, left_path,  left,  sub_w, height);
+        rc_right = write_color_image (enc, right_path, right, sub_w, height);
+    }
 
     if (rc_left == EXIT_SUCCESS && rc_right == EXIT_SUCCESS) {
-        printf ("Saved: %s  (%ux%u, BayerRG8 left)\n", left_path, sub_w, height);
+        printf ("Saved: %s  (%ux%u, BayerRG8 left)\n",  left_path,  sub_w, height);
         printf ("Saved: %s  (%ux%u, BayerRG8 right)\n", right_path, sub_w, height);
     }
 
@@ -248,7 +361,9 @@ write_dual_bayer_pair (const char *output_dir,
 }
 
 static int
-capture_one_frame (const char *device_id, const char *output_dir, const char *iface_ip)
+capture_one_frame (const char *device_id, const char *output_dir,
+                   const char *iface_ip, EncFormat enc,
+                   double exposure_us, int binning)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -277,14 +392,26 @@ capture_one_frame (const char *device_id, const char *output_dir, const char *if
 
     printf ("Configuring...\n");
 
+    /*
+     * Use Continuous rather than SingleFrame.  Some cameras (e.g. Lucid PDH016S)
+     * have a firmware bug where SingleFrame mode sends the frame before the host
+     * stream is ready, resulting in a partial/missing-packet failure every time.
+     * In Continuous mode we grab the first good frame and then stop.
+     */
     try_set_string_feature  (device, "AcquisitionMode", "Continuous");
     try_set_string_feature  (device, "AcquisitionStartMode", "Normal");
     try_set_string_feature  (device, "TriggerSelector", "FrameStart");
     try_set_string_feature  (device, "TriggerMode", "Off");
     try_set_string_feature  (device, "ImagerOutputSelector", "All");
-    try_set_integer_feature (device, "Width",  2880);
-    try_set_integer_feature (device, "Height", 1080);
+    if (binning > 1) {
+        try_set_integer_feature (device, "BinningHorizontal", (gint64) binning);
+        try_set_integer_feature (device, "BinningVertical",   (gint64) binning);
+    }
+    try_set_integer_feature (device, "Width",  (gint64)(2880 / binning));
+    try_set_integer_feature (device, "Height", (gint64)(1080 / binning));
     try_set_string_feature  (device, "PixelFormat", "DualBayerRG8");
+    if (exposure_us > 0.0)
+        try_set_float_feature (device, "ExposureTime", exposure_us);
     try_set_string_feature  (device, "TransferSelector", "Stream0");
     try_set_integer_feature (device, "TransferSelector", 0);
     try_set_string_feature  (device, "TransferControlMode", "Automatic");
@@ -317,9 +444,23 @@ capture_one_frame (const char *device_id, const char *output_dir, const char *if
     }
 
     if (ARV_IS_GV_STREAM (stream)) {
+        /*
+         * frame-retention: how long Aravis waits before declaring a frame lost.
+         * Default is ~200 ms — far too short when packets need to be resent over
+         * a non-ideal path.  Set to 10 s so resend has time to work.
+         *
+         * packet-timeout: how long to wait for any individual packet before
+         * sending a NACK.  200 ms gives the camera reasonable time to respond.
+         */
         g_object_set (stream,
-                      "packet-resend", ARV_GV_STREAM_PACKET_RESEND_ALWAYS,
+                      "packet-resend",   ARV_GV_STREAM_PACKET_RESEND_ALWAYS,
+                      "packet-timeout",  (guint) 200000,    /* 200 ms */
+                      "frame-retention", (guint) 10000000,  /* 10 s  */
                       NULL);
+        guint pt = 0, fr = 0;
+        g_object_get (stream, "packet-timeout", &pt, "frame-retention", &fr, NULL);
+        printf ("  stream packet-timeout  = %u µs\n", pt);
+        printf ("  stream frame-retention = %u µs\n", fr);
     }
 
     /*
@@ -351,12 +492,18 @@ capture_one_frame (const char *device_id, const char *output_dir, const char *if
                 printf ("  Forced GevSCDA -> %s (unicast)\n", host_ip);
             }
         }
-        arv_camera_gv_set_packet_size (camera, 1500, &error);
+        /*
+         * Keep packet size consistent with the GevSCPSPacketSize feature above (1400).
+         * 1500 was wrong here: GevSCPSPacketSize counts only GigE Vision payload, so
+         * 1500 + IP/UDP/GigE headers ≈ 1542 bytes total — above standard 1500-byte MTU,
+         * causing IP fragmentation and massive packet loss.
+         */
+        arv_camera_gv_set_packet_size (camera, 1400, &error);
         if (error) {
             fprintf (stderr, "warn: arv_camera_gv_set_packet_size failed: %s\n", error->message);
             g_clear_error (&error);
         } else {
-            printf ("  arv_camera_gv_set_packet_size(1500) OK\n");
+            printf ("  arv_camera_gv_set_packet_size(1400) OK\n");
         }
     }
 
@@ -446,6 +593,17 @@ capture_one_frame (const char *device_id, const char *output_dir, const char *if
         }
         g_clear_error (&e);
         g_free (stream_proto_values);
+
+        /* Verify image geometry was actually accepted by this camera. */
+        gint64 width_rb = arv_device_get_integer_feature_value (device, "Width", &e);
+        if (!e) printf ("  Width (readback)       = %" G_GINT64_FORMAT "\n", width_rb);
+        g_clear_error (&e);
+        gint64 height_rb = arv_device_get_integer_feature_value (device, "Height", &e);
+        if (!e) printf ("  Height (readback)      = %" G_GINT64_FORMAT "\n", height_rb);
+        g_clear_error (&e);
+        const char *pf_rb = arv_device_get_string_feature_value (device, "PixelFormat", &e);
+        if (!e && pf_rb) printf ("  PixelFormat (readback) = %s\n", pf_rb);
+        g_clear_error (&e);
     }
 
     printf ("Starting acquisition...\n");
@@ -463,18 +621,47 @@ capture_one_frame (const char *device_id, const char *output_dir, const char *if
     try_execute_optional_command (device, "TransferStart");
 
     ArvBuffer *buffer = NULL;
+    ArvBuffer *partial_buf = NULL;  /* last incomplete frame, kept for debug save */
+
     for (int i = 0; i < 10; i++) {
-        buffer = arv_stream_timeout_pop_buffer (stream, 2000000);
-        if (!buffer) {
+        ArvBuffer *b = arv_stream_timeout_pop_buffer (stream, 5000000); /* 5 s */
+        if (!b) {
             printf ("  attempt %d: no buffer\n", i);
             continue;
         }
-        ArvBufferStatus st = arv_buffer_get_status (buffer);
-        if (st == ARV_BUFFER_STATUS_SUCCESS)
+        ArvBufferStatus st = arv_buffer_get_status (b);
+        if (st == ARV_BUFFER_STATUS_SUCCESS) {
+            if (partial_buf) {
+                arv_stream_push_buffer (stream, partial_buf);
+                partial_buf = NULL;
+            }
+            buffer = b;
             break;
-        printf ("  attempt %d: buffer status = %d\n", i, st);
-        arv_stream_push_buffer (stream, buffer);
-        buffer = NULL;
+        }
+
+        size_t bdata_sz = 0;
+        arv_buffer_get_data (b, &bdata_sz);
+        ArvBufferPayloadType bpt = arv_buffer_get_payload_type (b);
+        guint bw = 0, bh = 0;
+        /* Only call image accessors if data arrived; a zero-byte timeout buffer
+         * has payload type IMAGE but uninitialized part headers, which triggers
+         * a GLib assertion inside arv_buffer_get_image_width/height. */
+        if (bdata_sz > 0 &&
+            (bpt == ARV_BUFFER_PAYLOAD_TYPE_IMAGE ||
+             bpt == ARV_BUFFER_PAYLOAD_TYPE_EXTENDED_CHUNK_DATA)) {
+            bw = arv_buffer_get_image_width (b);
+            bh = arv_buffer_get_image_height (b);
+        }
+        printf ("  attempt %d: status=%d  payload=0x%x  frame_id=%" G_GUINT64_FORMAT
+                "  recv=%zu bytes  %ux%u\n",
+                i, (int) st, (unsigned) bpt,
+                arv_buffer_get_frame_id (b),
+                bdata_sz, bw, bh);
+
+        /* Keep the last partial buffer; push back the previous one. */
+        if (partial_buf)
+            arv_stream_push_buffer (stream, partial_buf);
+        partial_buf = b;
 
         {
             GError *qe = NULL;
@@ -487,6 +674,33 @@ capture_one_frame (const char *device_id, const char *output_dir, const char *if
 
     if (!buffer) {
         fprintf (stderr, "error: timeout waiting for frame\n");
+
+        /* Attempt to save whatever partial data arrived for visual inspection. */
+        if (partial_buf) {
+            size_t ps = 0;
+            const guint8 *pd = (const guint8 *) arv_buffer_get_data (partial_buf, &ps);
+            ArvBufferPayloadType ppt = arv_buffer_get_payload_type (partial_buf);
+            guint pw = 0, ph = 0;
+            if (ps > 0 &&
+                (ppt == ARV_BUFFER_PAYLOAD_TYPE_IMAGE ||
+                 ppt == ARV_BUFFER_PAYLOAD_TYPE_EXTENDED_CHUNK_DATA)) {
+                pw = arv_buffer_get_image_width (partial_buf);
+                ph = arv_buffer_get_image_height (partial_buf);
+            }
+            fprintf (stderr, "  partial frame: %ux%u  %zu bytes received\n", pw, ph, ps);
+            if (pd && pw > 0 && ph > 0 && ps >= (size_t) pw * ph) {
+                char *ppath = g_build_filename (output_dir, "partial_frame.pgm", NULL);
+                if (write_pgm (ppath, pd, pw, ph) == EXIT_SUCCESS)
+                    fprintf (stderr, "  partial frame saved -> %s\n", ppath);
+                g_free (ppath);
+            } else if (pd && ps > 0) {
+                fprintf (stderr, "  (partial data too small to write as %ux%u PGM: %zu bytes)\n",
+                         pw, ph, ps);
+            }
+            arv_stream_push_buffer (stream, partial_buf);
+            partial_buf = NULL;
+        }
+
         if (ARV_IS_GV_STREAM (stream)) {
             guint64 n_completed = 0, n_failures = 0, n_underruns = 0;
             arv_stream_get_statistics (stream, &n_completed, &n_failures, &n_underruns);
@@ -526,11 +740,15 @@ capture_one_frame (const char *device_id, const char *output_dir, const char *if
 
         const char *pixel_format = arv_device_get_string_feature_value (device, "PixelFormat", NULL);
         if (pixel_format && strcmp (pixel_format, "DualBayerRG8") == 0) {
-            rc = write_dual_bayer_pair (output_dir, base, data, width, height);
+            rc = write_dual_bayer_pair (output_dir, base, data, width, height, enc);
         } else {
-            char *name = g_strdup_printf ("%s.pgm", base);
+            const char *ext = (enc == ENC_PNG) ? "png" : (enc == ENC_JPG) ? "jpg" : "pgm";
+            char *name = g_strdup_printf ("%s.%s", base, ext);
             char *path = g_build_filename (output_dir, name, NULL);
-            rc = write_pgm (path, data, width, height);
+            if (enc == ENC_PGM)
+                rc = write_pgm (path, data, width, height);
+            else
+                rc = write_color_image (enc, path, data, width, height);
             g_free (name);
             g_free (path);
         }
@@ -547,26 +765,35 @@ capture_one_frame (const char *device_id, const char *output_dir, const char *if
 int
 main (int argc, char **argv)
 {
-    const char *opt_serial = NULL;
-    const char *opt_address = NULL;
+    const char *opt_serial    = NULL;
+    const char *opt_address   = NULL;
     const char *opt_interface = NULL;
-    const char *opt_output = ".";
+    const char *opt_output    = ".";
+    const char *opt_encode    = NULL;
+    const char *opt_exposure  = NULL;
+    const char *opt_binning   = NULL;
 
     static const struct option long_opts[] = {
         { "serial",    required_argument, NULL, 's' },
         { "address",   required_argument, NULL, 'a' },
         { "interface", required_argument, NULL, 'i' },
         { "output",    required_argument, NULL, 'o' },
+        { "encode",    required_argument, NULL, 'e' },
+        { "exposure",  required_argument, NULL, 'x' },
+        { "binning",   required_argument, NULL, 'b' },
         { NULL, 0, NULL, 0 }
     };
 
     int c;
-    while ((c = getopt_long (argc, argv, "s:a:i:o:", long_opts, NULL)) != -1) {
+    while ((c = getopt_long (argc, argv, "s:a:i:o:e:x:b:", long_opts, NULL)) != -1) {
         switch (c) {
-            case 's': opt_serial = optarg; break;
-            case 'a': opt_address = optarg; break;
+            case 's': opt_serial    = optarg; break;
+            case 'a': opt_address   = optarg; break;
             case 'i': opt_interface = optarg; break;
-            case 'o': opt_output = optarg; break;
+            case 'o': opt_output    = optarg; break;
+            case 'e': opt_encode    = optarg; break;
+            case 'x': opt_exposure  = optarg; break;
+            case 'b': opt_binning   = optarg; break;
             default:
                 print_usage (argv[0]);
                 return EXIT_FAILURE;
@@ -582,6 +809,39 @@ main (int argc, char **argv)
         fprintf (stderr, "error: --serial and --address are mutually exclusive\n\n");
         print_usage (argv[0]);
         return EXIT_FAILURE;
+    }
+
+    double exposure_us = 0.0;
+    if (opt_exposure) {
+        exposure_us = atof (opt_exposure);
+        if (exposure_us <= 0.0) {
+            fprintf (stderr, "error: --exposure must be a positive number of microseconds\n\n");
+            print_usage (argv[0]);
+            return EXIT_FAILURE;
+        }
+    }
+
+    int binning = 1;
+    if (opt_binning) {
+        binning = atoi (opt_binning);
+        if (binning != 1 && binning != 2) {
+            fprintf (stderr, "error: --binning must be 1 or 2\n\n");
+            print_usage (argv[0]);
+            return EXIT_FAILURE;
+        }
+    }
+
+    EncFormat enc = ENC_PGM;
+    if (opt_encode) {
+        if (strcmp (opt_encode, "png") == 0)
+            enc = ENC_PNG;
+        else if (strcmp (opt_encode, "jpg") == 0 || strcmp (opt_encode, "jpeg") == 0)
+            enc = ENC_JPG;
+        else {
+            fprintf (stderr, "error: --encode must be 'png' or 'jpg'\n\n");
+            print_usage (argv[0]);
+            return EXIT_FAILURE;
+        }
     }
 
     const char *iface_ip = NULL;
@@ -610,13 +870,13 @@ main (int argc, char **argv)
         char *resolved_id = resolve_device_id_by_address (opt_address, opt_interface);
         if (resolved_id) {
             printf ("Using discovered device id: %s\n", resolved_id);
-            int rc = capture_one_frame (resolved_id, opt_output, iface_ip);
+            int rc = capture_one_frame (resolved_id, opt_output, iface_ip, enc, exposure_us, binning);
             g_free (resolved_id);
             return rc;
         }
 
         printf ("Device id not found in discovery; falling back to direct address.\n");
-        return capture_one_frame (opt_address, opt_output, iface_ip);
+        return capture_one_frame (opt_address, opt_output, iface_ip, enc, exposure_us, binning);
     }
 
     arv_update_device_list ();
@@ -645,5 +905,5 @@ main (int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    return capture_one_frame (matched_id, opt_output, iface_ip);
+    return capture_one_frame (matched_id, opt_output, iface_ip, enc, exposure_us, binning);
 }
