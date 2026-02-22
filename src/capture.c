@@ -393,19 +393,29 @@ capture_one_frame (const char *device_id, const char *output_dir,
     printf ("Configuring...\n");
 
     /*
-     * Use Continuous rather than SingleFrame.  Some cameras (e.g. Lucid PDH016S)
-     * have a firmware bug where SingleFrame mode sends the frame before the host
-     * stream is ready, resulting in a partial/missing-packet failure every time.
-     * In Continuous mode we grab the first good frame and then stop.
+     * SingleFrame + software trigger.  The camera waits after AcquisitionStart
+     * until we explicitly fire TriggerSoftware, guaranteeing the host stream
+     * socket is fully ready before any GVSP data arrives.
      */
-    try_set_string_feature  (device, "AcquisitionMode", "Continuous");
+    try_set_string_feature  (device, "AcquisitionMode", "SingleFrame");
     try_set_string_feature  (device, "AcquisitionStartMode", "Normal");
     try_set_string_feature  (device, "TriggerSelector", "FrameStart");
-    try_set_string_feature  (device, "TriggerMode", "Off");
+    try_set_string_feature  (device, "TriggerMode", "On");
+    try_set_string_feature  (device, "TriggerSource", "Software");
     try_set_string_feature  (device, "ImagerOutputSelector", "All");
     if (binning > 1) {
-        try_set_integer_feature (device, "BinningHorizontal", (gint64) binning);
-        try_set_integer_feature (device, "BinningVertical",   (gint64) binning);
+        /*
+         * Sensor-level binning (not digital): the sensor itself combines
+         * adjacent pixels, reducing data at the source.  Must set
+         * BinningSelector first, then dimensions, then mode ("Sum"
+         * preserves full dynamic range vs "Average").
+         * See Arena SDK C_Acquisition_SensorBinning example.
+         */
+        try_set_string_feature  (device, "BinningSelector",       "Sensor");
+        try_set_integer_feature (device, "BinningHorizontal",     (gint64) binning);
+        try_set_integer_feature (device, "BinningVertical",       (gint64) binning);
+        try_set_string_feature  (device, "BinningHorizontalMode", "Sum");
+        try_set_string_feature  (device, "BinningVerticalMode",   "Sum");
     }
     try_set_integer_feature (device, "Width",  (gint64)(2880 / binning));
     try_set_integer_feature (device, "Height", (gint64)(1080 / binning));
@@ -617,8 +627,36 @@ capture_one_frame (const char *device_id, const char *output_dir,
         return EXIT_FAILURE;
     }
 
-    /* No-op in Automatic mode, but required if camera stays in UserControlled. */
-    try_execute_optional_command (device, "TransferStart");
+    /* Wait for the camera to signal it is ready to accept a trigger. */
+    {
+        gboolean armed = FALSE;
+        int polls = 0;
+        while (!armed && polls < 100) {
+            GError *e = NULL;
+            armed = arv_device_get_boolean_feature_value (device, "TriggerArmed", &e);
+            g_clear_error (&e);
+            if (!armed) {
+                g_usleep (10000);  /* 10 ms */
+                polls++;
+            }
+        }
+        if (!armed)
+            fprintf (stderr, "warn: TriggerArmed not set after %d polls, triggering anyway\n", polls);
+        else
+            printf ("  TriggerArmed after %d poll(s)\n", polls);
+    }
+
+    /* Fire the software trigger — camera captures one frame and sends it. */
+    {
+        GError *e = NULL;
+        arv_device_execute_command (device, "TriggerSoftware", &e);
+        if (e) {
+            fprintf (stderr, "error: TriggerSoftware failed: %s\n", e->message);
+            g_clear_error (&e);
+        } else {
+            printf ("  TriggerSoftware executed\n");
+        }
+    }
 
     ArvBuffer *buffer = NULL;
     ArvBuffer *partial_buf = NULL;  /* last incomplete frame, kept for debug save */

@@ -92,57 +92,85 @@ With 2×2 binning, `pixel_pitch_mm` = 0.0069 mm (6.9 µm) instead of 0.00345 mm.
 
 
 
-## macOS Aravis Networking + Permissions Quick Note
+## macOS Considerations
 
-### Network adapter requirements
-- Camera and Mac must be on the **same subnet (use /24 recommended)**  
-  - Example:  
-    - Camera: `192.168.2.3`  
-    - Mac: `192.168.2.10`  
-    - Mask: `255.255.255.0`
-- Use **wired Ethernet only** (GigE Vision discovery will not work over Wi-Fi)
-- Prefer:
-  - Direct cable connection, or
-  - Simple unmanaged switch
-- Avoid:
-  - VLANs
-  - Corporate networks
-  - Routed subnets
-- Disable Wi-Fi while debugging to ensure correct interface selection
+macOS has several quirks that affect GigE Vision streaming. All of the items below have been
+confirmed to matter for reliable capture with the PDH016S.
 
-### Force correct interface
-macOS often has multiple interfaces (Wi-Fi + Ethernet).  
-Aravis may choose the wrong one.
+### 1. Disable Wi-Fi
 
-Find Ethernet interface:
+Aravis selects the interface to use for camera discovery and streaming.  When Wi-Fi is active,
+Aravis may choose it instead of the Ethernet NIC connected to the camera, resulting in discovery
+failures or silent stream loss.  **Turn off Wi-Fi** (System Settings → Wi-Fi → off) before
+running any capture.
+
+If you need Wi-Fi active for other reasons, force the correct interface with `--interface`:
+
 ```bash
-ifconfig
+./bin/capture -a 192.168.0.201 --interface en0 -e png -o /tmp/caps
 ```
 
-Run application forcing interface:
+(`en0` is a typical name for the built-in or first Thunderbolt Ethernet adapter — use `ifconfig`
+to confirm yours.)
+
+### 2. Enable Jumbo Frames (MTU 9000) on the camera NIC
+
+The default 1500-byte MTU limits GVSP payload to ~1400 bytes, so a 3.1 MB frame requires over
+2200 packets.  At standard MTU, macOS occasionally drops enough of them to prevent Aravis from
+assembling a complete frame.
+
+Setting the NIC to **9000-byte jumbo frames** reduces the packet count by roughly 6× and makes
+capture reliable.  Set it in System Settings → Network → your Ethernet adapter → Details →
+Hardware → MTU (custom) → `9000`.
+
+The camera itself negotiates within the configured packet size; the `capture` binary sends
+`GevSCPSPacketSize = 1400` (safe default), and Aravis re-confirms the value after stream
+creation.  Jumbo frames give the OS networking stack more headroom even at that payload size.
+
+### 3. Application Firewall may block incoming GVSP packets
+
+The macOS Application Firewall operates between the NIC driver and the BSD socket layer.
+`tcpdump` (which taps at the NIC/BPF level) will show GVSP packets arriving, but Aravis's
+UDP socket may receive nothing.  Symptoms:
+
+- All stream stats zero: `completed=0 failures=0 underruns=0 resent=0 missing=0`
+- `tcpdump -i en0 -n udp src 192.168.0.201` shows traffic
+- Capture hangs at "attempt 0: no buffer"
+
+**Quick fix:** run with `sudo`, which bypasses the Application Firewall:
+
 ```bash
-ARV_INTERFACE=en7 python3 app.py
+sudo ./bin/capture -a 192.168.0.201 --interface en0 -e png -o /tmp/caps
 ```
 
-Example with sudo:
+**Permanent fix:** allow the binary through the firewall:
+
 ```bash
-sudo ARV_INTERFACE=en7 python3 app.py
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add ./bin/capture
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp ./bin/capture
 ```
 
-### Sudo / permissions requirement
-On macOS, Aravis requires raw socket access for GigE Vision.
+You will need to re-allow the binary any time it is recompiled.
 
-Always run capture applications with:
+### 4. PF_PACKET sockets are not supported
+
+Linux Aravis uses raw PF_PACKET sockets for higher-throughput streaming.  macOS does not have
+this socket type.  The `capture` binary explicitly sets
+`ARV_GV_STREAM_OPTION_PACKET_SOCKET_DISABLED` before creating the stream so Aravis falls back
+to standard UDP — no action needed, but if you port this code elsewhere make sure that call is
+preserved.
+
+### Confirmed working setup
+
+| Setting | Value |
+|---------|-------|
+| Interface | en0 (direct cable to camera, no switch) |
+| Host IP | 192.168.0.149 / 24 |
+| Camera IP | 192.168.0.201 |
+| MTU | 9000 (jumbo frames) |
+| Wi-Fi | Disabled |
+| Run as | `sudo` (or firewall exception added) |
+
 ```bash
-sudo python3 app.py
-```
-
-Without sudo:
-- camera discovery may fail
-- streaming may silently fail
-- viewer may not see devices
-
-### Typical working invocation
-```bash
-sudo ARV_INTERFACE=en7 python3 capture.py
+sudo ./bin/capture -a 192.168.0.201 --interface en0 -e png -o /tmp/caps
 ```
