@@ -3,3 +3,6 @@ bin/
 
 # macOS metadata
 .DS_Store
+
+# the capture direcotry for the sample scripts
+images/
