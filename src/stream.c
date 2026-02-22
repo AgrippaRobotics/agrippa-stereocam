@@ -16,12 +16,43 @@
 
 #include <errno.h>
 #include <glib/gstdio.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <SDL2/SDL.h>
+
+static const double k_raw_gamma = 2.5;
+
+static const guint8 *
+gamma_lut_2p5 (void)
+{
+    static gboolean initialized = FALSE;
+    static guint8 lut[256];
+    if (!initialized) {
+        double inv_gamma = 1.0 / k_raw_gamma;
+        for (int i = 0; i < 256; i++) {
+            double x = (double) i / 255.0;
+            double y = pow (x, inv_gamma) * 255.0;
+            if (y < 0.0)
+                y = 0.0;
+            if (y > 255.0)
+                y = 255.0;
+            lut[i] = (guint8) y;
+        }
+        initialized = TRUE;
+    }
+    return lut;
+}
+
+static void
+apply_lut_inplace (guint8 *data, size_t n, const guint8 lut[256])
+{
+    for (size_t i = 0; i < n; i++)
+        data[i] = lut[data[i]];
+}
 
 /* ------------------------------------------------------------------ */
 /*  Shared helpers (same as capture.c)                                */
@@ -461,6 +492,7 @@ stream_loop (const char *device_id, const char *iface_ip,
     guint64 trigger_interval_us = (guint64) (1000000.0 / fps);
     guint64 frames_displayed = 0;
     guint64 frames_dropped = 0;
+    const guint8 *gamma_lut = gamma_lut_2p5 ();
     GTimer *stats_timer = g_timer_new ();
 
     while (!g_quit) {
@@ -546,6 +578,10 @@ stream_loop (const char *device_id, const char *iface_ip,
                 rrow[x] = row[2 * x + 1];
             }
         }
+
+        size_t eye_n = (size_t) sw * (size_t) h;
+        apply_lut_inplace (bayer_left, eye_n, gamma_lut);
+        apply_lut_inplace (bayer_right, eye_n, gamma_lut);
 
         /* Debayer each eye to RGB. */
         debayer_rg8_to_rgb (bayer_left,  rgb_left,  sw, h);

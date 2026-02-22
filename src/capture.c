@@ -15,6 +15,7 @@
 
 #include <errno.h>
 #include <glib/gstdio.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,35 @@
 #pragma GCC diagnostic pop
 
 typedef enum { ENC_PGM, ENC_PNG, ENC_JPG } EncFormat;
+static const double k_raw_gamma = 2.5;
+
+static const guint8 *
+gamma_lut_2p5 (void)
+{
+    static gboolean initialized = FALSE;
+    static guint8 lut[256];
+    if (!initialized) {
+        double inv_gamma = 1.0 / k_raw_gamma;
+        for (int i = 0; i < 256; i++) {
+            double x = (double) i / 255.0;
+            double y = pow (x, inv_gamma) * 255.0;
+            if (y < 0.0)
+                y = 0.0;
+            if (y > 255.0)
+                y = 255.0;
+            lut[i] = (guint8) y;
+        }
+        initialized = TRUE;
+    }
+    return lut;
+}
+
+static void
+apply_lut_inplace (guint8 *data, size_t n, const guint8 lut[256])
+{
+    for (size_t i = 0; i < n; i++)
+        data[i] = lut[data[i]];
+}
 
 static const char *
 interface_ipv4_address (const char *iface_name)
@@ -273,13 +303,19 @@ static int
 write_color_image (EncFormat enc, const char *path,
                    const guint8 *bayer, guint width, guint height)
 {
+    size_t bayer_n = (size_t) width * (size_t) height;
+    guint8 *gamma_bayer = g_malloc (bayer_n);
     guint8 *rgb = g_malloc ((size_t) width * (size_t) height * 3);
-    if (!rgb) {
+    if (!gamma_bayer || !rgb) {
+        g_free (gamma_bayer);
+        g_free (rgb);
         fprintf (stderr, "error: out of memory for debayer buffer\n");
         return EXIT_FAILURE;
     }
 
-    debayer_rg8_to_rgb (bayer, rgb, width, height);
+    memcpy (gamma_bayer, bayer, bayer_n);
+    apply_lut_inplace (gamma_bayer, bayer_n, gamma_lut_2p5 ());
+    debayer_rg8_to_rgb (gamma_bayer, rgb, width, height);
 
     int ok;
     if (enc == ENC_PNG)
@@ -287,6 +323,7 @@ write_color_image (EncFormat enc, const char *path,
     else
         ok = stbi_write_jpg (path, (int) width, (int) height, 3, rgb, 90);
 
+    g_free (gamma_bayer);
     g_free (rgb);
 
     if (!ok) {

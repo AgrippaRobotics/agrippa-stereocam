@@ -1,6 +1,6 @@
 CC      = gcc
 CFLAGS  = -Wall -Wextra -O2 $(shell pkg-config --cflags aravis-0.8)
-LIBS    = $(shell pkg-config --libs aravis-0.8)
+LIBS    = $(shell pkg-config --libs aravis-0.8) -lm
 SDL2_CFLAGS = $(shell pkg-config --cflags sdl2)
 SDL2_LIBS   = $(shell pkg-config --libs sdl2)
 SRCDIR  = src
