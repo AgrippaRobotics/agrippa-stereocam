@@ -202,6 +202,33 @@ try_set_float_feature (ArvDevice *device, const char *name, double value)
     }
 }
 
+static gint64
+read_integer_feature_or_default (ArvDevice *device, const char *name, gint64 fallback)
+{
+    GError *error = NULL;
+    gint64 value = arv_device_get_integer_feature_value (device, name, &error);
+    if (error) {
+        fprintf (stderr, "warn: failed to read %s: %s (using %" G_GINT64_FORMAT ")\n",
+                 name, error->message, fallback);
+        g_clear_error (&error);
+        return fallback;
+    }
+    return value;
+}
+
+static gboolean
+try_get_integer_feature (ArvDevice *device, const char *name, gint64 *out_value)
+{
+    GError *error = NULL;
+    gint64 value = arv_device_get_integer_feature_value (device, name, &error);
+    if (error) {
+        g_clear_error (&error);
+        return FALSE;
+    }
+    *out_value = value;
+    return TRUE;
+}
+
 static void
 try_execute_optional_command (ArvDevice *device, const char *name)
 {
@@ -339,32 +366,72 @@ write_dual_bayer_pair (const char *output_dir,
                        const guint8 *interleaved,
                        guint width,
                        guint height,
-                       EncFormat enc)
+                       EncFormat enc,
+                       int software_binning)
 {
     if (width % 2 != 0) {
         fprintf (stderr, "error: DualBayer frame width must be even, got %u\n", width);
         return EXIT_FAILURE;
     }
 
-    guint sub_w = width / 2;
-    size_t sub_n = (size_t) sub_w * (size_t) height;
-    guint8 *left = g_malloc (sub_n);
-    guint8 *right = g_malloc (sub_n);
-    if (!left || !right) {
-        g_free (left);
-        g_free (right);
+    guint src_sub_w = width / 2;
+    size_t src_sub_n = (size_t) src_sub_w * (size_t) height;
+    guint8 *left_src = g_malloc (src_sub_n);
+    guint8 *right_src = g_malloc (src_sub_n);
+    if (!left_src || !right_src) {
+        g_free (left_src);
+        g_free (right_src);
         fprintf (stderr, "error: out of memory while splitting DualBayer frame\n");
         return EXIT_FAILURE;
     }
 
     for (guint y = 0; y < height; y++) {
         const guint8 *row = interleaved + ((size_t) y * (size_t) width);
-        guint8 *lrow = left  + ((size_t) y * (size_t) sub_w);
-        guint8 *rrow = right + ((size_t) y * (size_t) sub_w);
-        for (guint x = 0; x < sub_w; x++) {
+        guint8 *lrow = left_src  + ((size_t) y * (size_t) src_sub_w);
+        guint8 *rrow = right_src + ((size_t) y * (size_t) src_sub_w);
+        for (guint x = 0; x < src_sub_w; x++) {
             lrow[x] = row[2 * x];
             rrow[x] = row[2 * x + 1];
         }
+    }
+
+    guint dst_w = src_sub_w;
+    guint dst_h = height;
+    guint8 *left = left_src;
+    guint8 *right = right_src;
+    guint8 *left_bin = NULL;
+    guint8 *right_bin = NULL;
+
+    if (software_binning > 1) {
+        dst_w = src_sub_w / 2;
+        dst_h = height / 2;
+        size_t dst_n = (size_t) dst_w * (size_t) dst_h;
+        left_bin = g_malloc (dst_n);
+        right_bin = g_malloc (dst_n);
+        if (!left_bin || !right_bin) {
+            g_free (left_bin);
+            g_free (right_bin);
+            g_free (left_src);
+            g_free (right_src);
+            fprintf (stderr, "error: out of memory while software-binning DualBayer frame\n");
+            return EXIT_FAILURE;
+        }
+        for (guint y = 0; y < dst_h; y++) {
+            guint sy = 2 * y;
+            for (guint x = 0; x < dst_w; x++) {
+                guint sx = 2 * x;
+                size_t i00 = (size_t) sy * src_sub_w + sx;
+                size_t i01 = i00 + 1;
+                size_t i10 = i00 + src_sub_w;
+                size_t i11 = i10 + 1;
+                left_bin[(size_t) y * dst_w + x] = (guint8)
+                    ((left_src[i00] + left_src[i01] + left_src[i10] + left_src[i11]) / 4);
+                right_bin[(size_t) y * dst_w + x] = (guint8)
+                    ((right_src[i00] + right_src[i01] + right_src[i10] + right_src[i11]) / 4);
+            }
+        }
+        left = left_bin;
+        right = right_bin;
     }
 
     const char *ext = (enc == ENC_PNG) ? "png" : (enc == ENC_JPG) ? "jpg" : "pgm";
@@ -375,24 +442,26 @@ write_dual_bayer_pair (const char *output_dir,
 
     int rc_left, rc_right;
     if (enc == ENC_PGM) {
-        rc_left  = write_pgm (left_path,  left,  sub_w, height);
-        rc_right = write_pgm (right_path, right, sub_w, height);
+        rc_left  = write_pgm (left_path,  left,  dst_w, dst_h);
+        rc_right = write_pgm (right_path, right, dst_w, dst_h);
     } else {
-        rc_left  = write_color_image (enc, left_path,  left,  sub_w, height);
-        rc_right = write_color_image (enc, right_path, right, sub_w, height);
+        rc_left  = write_color_image (enc, left_path,  left,  dst_w, dst_h);
+        rc_right = write_color_image (enc, right_path, right, dst_w, dst_h);
     }
 
     if (rc_left == EXIT_SUCCESS && rc_right == EXIT_SUCCESS) {
-        printf ("Saved: %s  (%ux%u, BayerRG8 left)\n",  left_path,  sub_w, height);
-        printf ("Saved: %s  (%ux%u, BayerRG8 right)\n", right_path, sub_w, height);
+        printf ("Saved: %s  (%ux%u, BayerRG8 left)\n",  left_path,  dst_w, dst_h);
+        printf ("Saved: %s  (%ux%u, BayerRG8 right)\n", right_path, dst_w, dst_h);
     }
 
     g_free (left_name);
     g_free (right_name);
     g_free (left_path);
     g_free (right_path);
-    g_free (left);
-    g_free (right);
+    g_free (left_bin);
+    g_free (right_bin);
+    g_free (left_src);
+    g_free (right_src);
 
     return (rc_left == EXIT_SUCCESS && rc_right == EXIT_SUCCESS) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
@@ -440,22 +509,47 @@ capture_one_frame (const char *device_id, const char *output_dir,
     try_set_string_feature  (device, "TriggerMode", "On");
     try_set_string_feature  (device, "TriggerSource", "Software");
     try_set_string_feature  (device, "ImagerOutputSelector", "All");
-    if (binning > 1) {
-        /*
-         * Sensor-level binning (not digital): the sensor itself combines
-         * adjacent pixels, reducing data at the source.  Must set
-         * BinningSelector first, then dimensions, then mode ("Sum"
-         * preserves full dynamic range vs "Average").
-         * See Arena SDK C_Acquisition_SensorBinning example.
-         */
-        try_set_string_feature  (device, "BinningSelector",       "Sensor");
-        try_set_integer_feature (device, "BinningHorizontal",     (gint64) binning);
-        try_set_integer_feature (device, "BinningVertical",       (gint64) binning);
-        try_set_string_feature  (device, "BinningHorizontalMode", "Sum");
-        try_set_string_feature  (device, "BinningVerticalMode",   "Sum");
+    /*
+     * Always program binning nodes, including binning=1. If a previous run left
+     * binning enabled, skipping these writes causes geometry to stay clamped,
+     * which looks like an ROI crop.
+     */
+    try_set_string_feature  (device, "BinningSelector",       "Sensor");
+    try_set_integer_feature (device, "BinningHorizontal",     (gint64) binning);
+    try_set_integer_feature (device, "BinningVertical",       (gint64) binning);
+    try_set_string_feature  (device, "BinningHorizontalMode", "Average");
+    try_set_string_feature  (device, "BinningVerticalMode",   "Average");
+
+    gint64 eff_bin_h = 1, eff_bin_v = 1;
+    gboolean has_bin_h = try_get_integer_feature (device, "BinningHorizontal", &eff_bin_h);
+    gboolean has_bin_v = try_get_integer_feature (device, "BinningVertical", &eff_bin_v);
+    int software_binning = 1;
+    if (binning > 1 && (!has_bin_h || !has_bin_v || eff_bin_h != binning || eff_bin_v != binning)) {
+        software_binning = binning;
+        eff_bin_h = 1;
+        eff_bin_v = 1;
+        fprintf (stderr,
+                 "warn: hardware binning unavailable/ineffective (H=%" G_GINT64_FORMAT
+                 " V=%" G_GINT64_FORMAT "); using %dx software binning\n",
+                 eff_bin_h, eff_bin_v, software_binning);
     }
-    try_set_integer_feature (device, "Width",  (gint64)(2880 / binning));
-    try_set_integer_feature (device, "Height", (gint64)(1080 / binning));
+
+    /* Reset ROI offsets, then apply geometry from effective binning factors. */
+    try_set_integer_feature (device, "OffsetX", 0);
+    try_set_integer_feature (device, "OffsetY", 0);
+    gint64 target_w = (eff_bin_h > 0) ? (2880 / eff_bin_h) : 2880;
+    gint64 target_h = (eff_bin_v > 0) ? (1080 / eff_bin_v) : 1080;
+    try_set_integer_feature (device, "Width",  target_w);
+    try_set_integer_feature (device, "Height", target_h);
+
+    gint64 width_rb = read_integer_feature_or_default (device, "Width", target_w);
+    gint64 height_rb = read_integer_feature_or_default (device, "Height", target_h);
+    if (width_rb != target_w || height_rb != target_h) {
+        fprintf (stderr,
+                 "warn: geometry readback is %" G_GINT64_FORMAT "x%" G_GINT64_FORMAT
+                 " (requested %" G_GINT64_FORMAT "x%" G_GINT64_FORMAT ")\n",
+                 width_rb, height_rb, target_w, target_h);
+    }
     try_set_string_feature  (device, "PixelFormat", "DualBayerRG8");
     if (exposure_us > 0.0)
         try_set_float_feature (device, "ExposureTime", exposure_us);
@@ -815,7 +909,7 @@ capture_one_frame (const char *device_id, const char *output_dir,
 
         const char *pixel_format = arv_device_get_string_feature_value (device, "PixelFormat", NULL);
         if (pixel_format && strcmp (pixel_format, "DualBayerRG8") == 0) {
-            rc = write_dual_bayer_pair (output_dir, base, data, width, height, enc);
+            rc = write_dual_bayer_pair (output_dir, base, data, width, height, enc, software_binning);
         } else {
             const char *ext = (enc == ENC_PNG) ? "png" : (enc == ENC_JPG) ? "jpg" : "pgm";
             char *name = g_strdup_printf ("%s.%s", base, ext);

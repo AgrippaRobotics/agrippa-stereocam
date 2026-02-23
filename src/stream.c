@@ -183,6 +183,33 @@ try_set_float_feature (ArvDevice *device, const char *name, double value)
     }
 }
 
+static gint64
+read_integer_feature_or_default (ArvDevice *device, const char *name, gint64 fallback)
+{
+    GError *error = NULL;
+    gint64 value = arv_device_get_integer_feature_value (device, name, &error);
+    if (error) {
+        fprintf (stderr, "warn: failed to read %s: %s (using %" G_GINT64_FORMAT ")\n",
+                 name, error->message, fallback);
+        g_clear_error (&error);
+        return fallback;
+    }
+    return value;
+}
+
+static gboolean
+try_get_integer_feature (ArvDevice *device, const char *name, gint64 *out_value)
+{
+    GError *error = NULL;
+    gint64 value = arv_device_get_integer_feature_value (device, name, &error);
+    if (error) {
+        g_clear_error (&error);
+        return FALSE;
+    }
+    *out_value = value;
+    return TRUE;
+}
+
 static void
 try_execute_optional_command (ArvDevice *device, const char *name)
 {
@@ -323,19 +350,42 @@ stream_loop (const char *device_id, const char *iface_ip,
     try_set_string_feature  (device, "TriggerSource", "Software");
     try_set_string_feature  (device, "ImagerOutputSelector", "All");
 
-    if (binning > 1) {
-        try_set_string_feature  (device, "BinningSelector",       "Sensor");
-        try_set_integer_feature (device, "BinningHorizontal",     (gint64) binning);
-        try_set_integer_feature (device, "BinningVertical",       (gint64) binning);
-        try_set_string_feature  (device, "BinningHorizontalMode", "Sum");
-        try_set_string_feature  (device, "BinningVerticalMode",   "Sum");
+    /* Always program binning nodes so --binning=1 truly disables binning. */
+    try_set_string_feature  (device, "BinningSelector",       "Sensor");
+    try_set_integer_feature (device, "BinningHorizontal",     (gint64) binning);
+    try_set_integer_feature (device, "BinningVertical",       (gint64) binning);
+    try_set_string_feature  (device, "BinningHorizontalMode", "Average");
+    try_set_string_feature  (device, "BinningVerticalMode",   "Average");
+
+    gint64 eff_bin_h = 1, eff_bin_v = 1;
+    gboolean has_bin_h = try_get_integer_feature (device, "BinningHorizontal", &eff_bin_h);
+    gboolean has_bin_v = try_get_integer_feature (device, "BinningVertical", &eff_bin_v);
+    int software_binning = 1;
+    if (binning > 1 && (!has_bin_h || !has_bin_v || eff_bin_h != binning || eff_bin_v != binning)) {
+        software_binning = binning;
+        eff_bin_h = 1;
+        eff_bin_v = 1;
+        fprintf (stderr,
+                 "warn: hardware binning unavailable/ineffective; using %dx software binning\n",
+                 software_binning);
     }
 
-    guint frame_w = (guint)(2880 / binning);
-    guint frame_h = (guint)(1080 / binning);
-    try_set_integer_feature (device, "Width",  (gint64) frame_w);
-    try_set_integer_feature (device, "Height", (gint64) frame_h);
+    /* Reset ROI offsets, then apply geometry from effective binning factors. */
+    try_set_integer_feature (device, "OffsetX", 0);
+    try_set_integer_feature (device, "OffsetY", 0);
+    gint64 target_w = (eff_bin_h > 0) ? (2880 / eff_bin_h) : 2880;
+    gint64 target_h = (eff_bin_v > 0) ? (1080 / eff_bin_v) : 1080;
+    try_set_integer_feature (device, "Width",  target_w);
+    try_set_integer_feature (device, "Height", target_h);
     try_set_string_feature  (device, "PixelFormat", "DualBayerRG8");
+
+    guint frame_w = (guint) read_integer_feature_or_default (device, "Width", target_w);
+    guint frame_h = (guint) read_integer_feature_or_default (device, "Height", target_h);
+    if ((gint64) frame_w != target_w || (gint64) frame_h != target_h) {
+        fprintf (stderr,
+                 "warn: geometry readback is %ux%u (requested %" G_GINT64_FORMAT "x%" G_GINT64_FORMAT ")\n",
+                 frame_w, frame_h, target_w, target_h);
+    }
 
     if (exposure_us > 0.0)
         try_set_float_feature (device, "ExposureTime", exposure_us);
@@ -415,9 +465,12 @@ stream_loop (const char *device_id, const char *iface_ip,
 
     /* ---- SDL2 setup ---- */
 
-    guint sub_w = frame_w / 2;  /* each eye after deinterleaving */
-    guint display_w = sub_w * 2; /* side-by-side = original frame width */
-    guint display_h = frame_h;
+    guint src_sub_w = frame_w / 2;  /* each eye after deinterleaving */
+    guint src_h = frame_h;
+    guint proc_sub_w = src_sub_w / (guint) software_binning;
+    guint proc_h = src_h / (guint) software_binning;
+    guint display_w = proc_sub_w * 2;
+    guint display_h = proc_h;
 
     if (SDL_Init (SDL_INIT_VIDEO) != 0) {
         fprintf (stderr, "error: SDL_Init: %s\n", SDL_GetError ());
@@ -472,10 +525,12 @@ stream_loop (const char *device_id, const char *iface_ip,
     }
 
     /* Debayer scratch buffers for left and right eyes. */
-    guint8 *rgb_left  = g_malloc ((size_t) sub_w * display_h * 3);
-    guint8 *rgb_right = g_malloc ((size_t) sub_w * display_h * 3);
-    guint8 *bayer_left  = g_malloc ((size_t) sub_w * display_h);
-    guint8 *bayer_right = g_malloc ((size_t) sub_w * display_h);
+    guint8 *rgb_left  = g_malloc ((size_t) proc_sub_w * proc_h * 3);
+    guint8 *rgb_right = g_malloc ((size_t) proc_sub_w * proc_h * 3);
+    guint8 *bayer_left_src  = g_malloc ((size_t) src_sub_w * src_h);
+    guint8 *bayer_right_src = g_malloc ((size_t) src_sub_w * src_h);
+    guint8 *bayer_left  = g_malloc ((size_t) proc_sub_w * proc_h);
+    guint8 *bayer_right = g_malloc ((size_t) proc_sub_w * proc_h);
 
     /* ---- Start acquisition ---- */
 
@@ -561,7 +616,7 @@ stream_loop (const char *device_id, const char *iface_ip,
         guint h = arv_buffer_get_image_height (buffer);
         size_t needed = (size_t) w * (size_t) h;
 
-        if (!data || data_size < needed || w % 2 != 0) {
+        if (!data || data_size < needed || w % 2 != 0 || w != frame_w || h != frame_h) {
             frames_dropped++;
             arv_stream_push_buffer (stream, buffer);
             continue;
@@ -571,32 +626,52 @@ stream_loop (const char *device_id, const char *iface_ip,
         guint sw = w / 2;
         for (guint y = 0; y < h; y++) {
             const guint8 *row = data + ((size_t) y * (size_t) w);
-            guint8 *lrow = bayer_left  + ((size_t) y * (size_t) sw);
-            guint8 *rrow = bayer_right + ((size_t) y * (size_t) sw);
+            guint8 *lrow = bayer_left_src  + ((size_t) y * (size_t) sw);
+            guint8 *rrow = bayer_right_src + ((size_t) y * (size_t) sw);
             for (guint x = 0; x < sw; x++) {
                 lrow[x] = row[2 * x];
                 rrow[x] = row[2 * x + 1];
             }
         }
 
-        size_t eye_n = (size_t) sw * (size_t) h;
+        if (software_binning > 1) {
+            for (guint y = 0; y < proc_h; y++) {
+                guint sy = 2 * y;
+                for (guint x = 0; x < proc_sub_w; x++) {
+                    guint sx = 2 * x;
+                    size_t i00 = (size_t) sy * sw + sx;
+                    size_t i01 = i00 + 1;
+                    size_t i10 = i00 + sw;
+                    size_t i11 = i10 + 1;
+                    bayer_left[(size_t) y * proc_sub_w + x] = (guint8)
+                        ((bayer_left_src[i00] + bayer_left_src[i01] + bayer_left_src[i10] + bayer_left_src[i11]) / 4);
+                    bayer_right[(size_t) y * proc_sub_w + x] = (guint8)
+                        ((bayer_right_src[i00] + bayer_right_src[i01] + bayer_right_src[i10] + bayer_right_src[i11]) / 4);
+                }
+            }
+        } else {
+            memcpy (bayer_left, bayer_left_src, (size_t) sw * h);
+            memcpy (bayer_right, bayer_right_src, (size_t) sw * h);
+        }
+
+        size_t eye_n = (size_t) proc_sub_w * (size_t) proc_h;
         apply_lut_inplace (bayer_left, eye_n, gamma_lut);
         apply_lut_inplace (bayer_right, eye_n, gamma_lut);
 
         /* Debayer each eye to RGB. */
-        debayer_rg8_to_rgb (bayer_left,  rgb_left,  sw, h);
-        debayer_rg8_to_rgb (bayer_right, rgb_right, sw, h);
+        debayer_rg8_to_rgb (bayer_left,  rgb_left,  proc_sub_w, proc_h);
+        debayer_rg8_to_rgb (bayer_right, rgb_right, proc_sub_w, proc_h);
 
         /* Upload to SDL texture: left eye on the left half, right on the right. */
         void *tex_pixels;
         int tex_pitch;
         if (SDL_LockTexture (texture, NULL, &tex_pixels, &tex_pitch) == 0) {
-            for (guint y = 0; y < h; y++) {
+            for (guint y = 0; y < proc_h; y++) {
                 guint8 *dst = (guint8 *) tex_pixels + (size_t) y * (size_t) tex_pitch;
                 /* Left eye */
-                memcpy (dst, rgb_left + (size_t) y * sw * 3, sw * 3);
+                memcpy (dst, rgb_left + (size_t) y * proc_sub_w * 3, proc_sub_w * 3);
                 /* Right eye */
-                memcpy (dst + sw * 3, rgb_right + (size_t) y * sw * 3, sw * 3);
+                memcpy (dst + proc_sub_w * 3, rgb_right + (size_t) y * proc_sub_w * 3, proc_sub_w * 3);
             }
             SDL_UnlockTexture (texture);
         }
@@ -629,6 +704,8 @@ stream_loop (const char *device_id, const char *iface_ip,
     arv_camera_stop_acquisition (camera, NULL);
 
 cleanup:
+    g_free (bayer_left_src);
+    g_free (bayer_right_src);
     g_free (bayer_left);
     g_free (bayer_right);
     g_free (rgb_left);
