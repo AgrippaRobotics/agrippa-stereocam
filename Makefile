@@ -6,7 +6,7 @@ SDL2_LIBS   = $(shell pkg-config --libs sdl2)
 SRCDIR  = src
 BINDIR  = bin
 
-TARGETS = $(BINDIR)/connect $(BINDIR)/capture $(BINDIR)/capture_debug $(BINDIR)/stream
+TARGETS = $(BINDIR)/connect $(BINDIR)/capture $(BINDIR)/capture_debug $(BINDIR)/stream $(BINDIR)/list_cameras
 
 .PHONY: all clean
 
@@ -28,6 +28,9 @@ $(BINDIR)/capture_debug: $(SRCDIR)/capture_debug.c
 $(BINDIR)/stream: $(SRCDIR)/stream.c
 	$(CC) $(CFLAGS) $(SDL2_CFLAGS) -o $@ $< $(LIBS) $(SDL2_LIBS)
 	codesign --force --sign - $@
+
+$(BINDIR)/list_cameras: $(SRCDIR)/list_cameras.c
+	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
 
 clean:
 	rm -rf $(BINDIR)
