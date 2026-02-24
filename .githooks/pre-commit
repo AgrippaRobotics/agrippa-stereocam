@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# pre-commit hook — prevent accidental exposure of personal emails.
+#
+# Checks:
+#   1. Commit author email must be a GitHub noreply address.
+#   2. Staged file contents must not contain any non-noreply email addresses.
+#
+# Install:  git config core.hooksPath .githooks
+
+ALLOWED_DOMAIN="users.noreply.github.com"
+
+# --- Check 1: author email ---
+
+author_email=$(git config user.email)
+if [[ "$author_email" != *@"$ALLOWED_DOMAIN" ]]; then
+    echo "ERROR: git user.email is '$author_email'"
+    echo "       Must end with @$ALLOWED_DOMAIN"
+    echo ""
+    echo "Fix with:"
+    echo "  git config user.email '<id+user>@$ALLOWED_DOMAIN'"
+    exit 1
+fi
+
+# --- Check 2: scan staged content for email addresses not in the allowed domain ---
+
+# Match anything that looks like an email, then reject if not @users.noreply.github.com.
+# Exclude vendor/ (third-party code has its own author emails).
+matches=$(git diff --cached --diff-filter=ACMR -U0 -- . ':!vendor/' \
+    | grep -oEi '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+    | grep -iv "@${ALLOWED_DOMAIN}$" \
+    | grep -iv '@anthropic\.com$' \
+    | sort -u || true)
+
+if [ -n "$matches" ]; then
+    echo "ERROR: staged changes contain email address(es) outside $ALLOWED_DOMAIN:"
+    echo ""
+    echo "$matches"
+    echo ""
+    echo "Remove them before committing."
+    exit 1
+fi

@@ -4,5 +4,15 @@ bin/
 # macOS metadata
 .DS_Store
 
-# the capture direcotry for the sample scripts
+# IDE
+.vscode/
+
+# Captured images
 images/
+
+# Vendor SDKs and documentation (local only)
+ArenaSDK_*/
+PDH016S_*_Documentation*/
+
+# Scratch images
+*.png
