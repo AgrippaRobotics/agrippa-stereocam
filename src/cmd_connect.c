@@ -1,0 +1,92 @@
+/*
+ * cmd_connect.c — "ag-cam-tools connect" subcommand
+ */
+
+#include "common.h"
+#include "../vendor/argtable3.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int
+cmd_connect (int argc, char *argv[], arg_dstr_t res, void *ctx)
+{
+    (void) ctx;
+
+    struct arg_str *cmd       = arg_str1 (NULL, NULL, "connect", NULL);
+    struct arg_str *serial    = arg_str0 ("s", "serial",    "<serial>",
+                                          "match by serial number");
+    struct arg_str *address   = arg_str0 ("a", "address",   "<address>",
+                                          "connect by camera IP");
+    struct arg_str *interface = arg_str0 ("i", "interface",  "<iface>",
+                                          "restrict to this NIC");
+    struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
+    struct arg_end *end       = arg_end (5);
+    void *argtable[] = { cmd, serial, address, interface, help, end };
+
+    int exitcode = EXIT_SUCCESS;
+    if (arg_nullcheck (argtable) != 0) {
+        arg_dstr_catf (res, "error: insufficient memory\n");
+        exitcode = EXIT_FAILURE;
+        goto done;
+    }
+
+    int nerrors = arg_parse (argc, argv, argtable);
+    if (arg_make_syntax_err_help_msg (res, "connect", help->count, nerrors,
+                                       argtable, end, &exitcode))
+        goto done;
+
+    if (serial->count && address->count) {
+        arg_dstr_catf (res, "error: --serial and --address are mutually exclusive\n");
+        exitcode = EXIT_FAILURE;
+        goto done;
+    }
+
+    const char *opt_serial    = serial->count    ? serial->sval[0]    : NULL;
+    const char *opt_address   = address->count   ? address->sval[0]   : NULL;
+    const char *opt_interface = interface->count  ? interface->sval[0] : NULL;
+
+    if (opt_interface) {
+        const char *ip = setup_interface (opt_interface);
+        if (!ip) { exitcode = EXIT_FAILURE; goto done; }
+    }
+
+    char *device_id = resolve_device (opt_serial, opt_address, opt_interface, TRUE);
+    if (!device_id) {
+        exitcode = EXIT_FAILURE;
+        goto done;
+    }
+
+    printf ("Connecting to %s ...\n", device_id);
+
+    GError    *error  = NULL;
+    ArvCamera *camera = arv_camera_new (device_id, &error);
+    if (!camera) {
+        fprintf (stderr, "error: %s\n",
+                 error ? error->message : "failed to open device");
+        g_clear_error (&error);
+        g_free (device_id);
+        arv_shutdown ();
+        exitcode = EXIT_FAILURE;
+        goto done;
+    }
+
+    ArvDevice  *device     = arv_camera_get_device (camera);
+    const char *model      = arv_camera_get_model_name  (camera, NULL);
+    const char *vendor     = arv_camera_get_vendor_name (camera, NULL);
+    const char *serial_out = arv_device_get_string_feature_value (
+                                 device, "DeviceSerialNumber", NULL);
+
+    printf ("Connected!\n");
+    printf ("  Vendor : %s\n", vendor     ? vendor     : "(unknown)");
+    printf ("  Model  : %s\n", model      ? model      : "(unknown)");
+    printf ("  Serial : %s\n", serial_out ? serial_out : "(unknown)");
+
+    g_object_unref (camera);
+    g_free (device_id);
+    arv_shutdown ();
+
+done:
+    arg_freetable (argtable, sizeof argtable / sizeof argtable[0]);
+    return exitcode;
+}
