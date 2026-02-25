@@ -62,6 +62,20 @@ _ag_cam_tools_stream() {
         '(-h --help)'{-h,--help}'[print this help]'
 }
 
+_ag_cam_tools_focus() {
+    _arguments \
+        '(-a --address)-s[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-a --address)--serial=[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-s --serial)-a[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-s --serial)--address=[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-i --interface)'{-i,--interface}'=[force NIC selection]:interface:_net_interfaces' \
+        '(-f --fps)'{-f,--fps}'=[trigger rate in Hz]:rate:' \
+        '(-x --exposure)'{-x,--exposure}'=[exposure time in microseconds]:microseconds:' \
+        '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
+        '*--roi=[region of interest x y w h]:roi:' \
+        '(-h --help)'{-h,--help}'[print this help]'
+}
+
 _ag_cam_tools() {
     local -a subcmds
     subcmds=(
@@ -69,6 +83,7 @@ _ag_cam_tools() {
         'list:Discover and list GigE cameras'
         'capture:Capture a single stereo frame pair'
         'stream:Real-time stereo preview via SDL2'
+        'focus:Real-time focus scoring for lens adjustment'
     )
 
     if (( CURRENT == 2 )); then
@@ -79,6 +94,7 @@ _ag_cam_tools() {
             list)    _ag_cam_tools_list ;;
             capture) _ag_cam_tools_capture ;;
             stream)  _ag_cam_tools_stream ;;
+            focus)   _ag_cam_tools_focus ;;
         esac
     fi
 }

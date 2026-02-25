@@ -15,10 +15,12 @@ TARGET = $(BINDIR)/ag-cam-tools
 SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/common.c \
        $(SRCDIR)/image.c \
+       $(SRCDIR)/focus.c \
        $(SRCDIR)/cmd_connect.c \
        $(SRCDIR)/cmd_list.c \
        $(SRCDIR)/cmd_capture.c \
-       $(SRCDIR)/cmd_stream.c
+       $(SRCDIR)/cmd_stream.c \
+       $(SRCDIR)/cmd_focus.c
 
 VENDOR_SRCS = $(VENDORDIR)/argtable3.c
 

@@ -13,6 +13,7 @@ int cmd_connect (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_list    (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_stream  (int argc, char *argv[], arg_dstr_t res, void *ctx);
+int cmd_focus   (int argc, char *argv[], arg_dstr_t res, void *ctx);
 
 static void
 print_usage (void)
@@ -27,6 +28,7 @@ print_usage (void)
             "  list      Discover and list GigE cameras\n"
             "  capture   Capture a single stereo frame pair\n"
             "  stream    Real-time stereo preview via SDL2\n"
+            "  focus     Real-time focus scoring for lens adjustment\n"
             "\n"
             "Run 'ag-cam-tools <command> --help' for command-specific options.\n");
 }
@@ -46,6 +48,8 @@ main (int argc, char *argv[])
                       "Capture a single stereo frame pair", NULL);
     arg_cmd_register ("stream",  cmd_stream,
                       "Real-time stereo preview via SDL2", NULL);
+    arg_cmd_register ("focus",   cmd_focus,
+                      "Real-time focus scoring for lens adjustment", NULL);
 
     if (argc < 2 ||
         strcmp (argv[1], "--help") == 0 ||

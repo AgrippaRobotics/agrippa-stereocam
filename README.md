@@ -29,6 +29,7 @@ ag-cam-tools <command> [options]
 | `connect` | Connect to a camera and print device info |
 | `capture` | Capture a single stereo frame pair |
 | `stream` | Real-time stereo preview via SDL2 |
+| `focus` | Real-time focus scoring for lens adjustment |
 
 ### `list`
 
@@ -67,9 +68,32 @@ ag-cam-tools capture -a 192.168.0.201 -e png -b 2 -x 50000 -v
 ### `stream`
 
 ```bash
-ag-cam-tools stream -a 192.168.0.201 -f 10
-ag-cam-tools stream -a 192.168.0.201 -f 5 -b 2 -x 30000
-ag-cam-tools stream -a 192.168.0.201 -t 0.162   # enable AprilTag detection
+ag-cam-tools stream -a 192.168.0.201 -r 10
+ag-cam-tools stream -a 192.168.0.201 -r 5 -b 2 -x 30000
+ag-cam-tools stream -a 192.168.0.201 -f tag36h11
+```
+
+| Option | Description |
+|--------|-------------|
+| `-s`, `--serial` | Match camera by serial number |
+| `-a`, `--address` | Connect by camera IP address |
+| `-i`, `--interface` | Force NIC selection |
+| `-r`, `--fps` | Trigger rate in Hz (default: 10) |
+| `-f`, `--apriltag-family` | Enable apriltag detection and choose family (`tag16h5`, `tag25h9`, `tag36h10`, `tag36h11`) |
+| `-x`, `--exposure` | Exposure time in microseconds |
+| `-b`, `--binning` | Sensor binning factor: `1` or `2` |
+
+Press `q` or `Esc` to quit the stream window.
+When AprilTag detection is enabled, detections are printed to stdout per frame/eye.
+
+### `focus`
+
+Live focus-scoring tool for adjusting M12 camera lenses. Displays the stereo stream with a Variance-of-Laplacian sharpness score overlaid on each eye. Screw lenses in/out while watching the score — higher values mean sharper focus.
+
+```bash
+ag-cam-tools focus -a 192.168.0.201              # default: center 50% ROI, 10 Hz
+ag-cam-tools focus -a 192.168.0.201 --roi 200 200 600 400  # custom ROI
+ag-cam-tools focus -a 192.168.0.201 -x 30000 -b 2          # with exposure and binning
 ```
 
 | Option | Description |
@@ -78,17 +102,13 @@ ag-cam-tools stream -a 192.168.0.201 -t 0.162   # enable AprilTag detection
 | `-a`, `--address` | Connect by camera IP address |
 | `-i`, `--interface` | Force NIC selection |
 | `-f`, `--fps` | Trigger rate in Hz (default: 10) |
-| `-t`, `--tag-size` | AprilTag size in meters (enables detection) |
 | `-x`, `--exposure` | Exposure time in microseconds |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
+| `--roi` | Region of interest as `x y w h` pixels (default: center 50%) |
 
-Press `q` or `Esc` to quit the stream window.
+The SDL window shows: live stereo preview, green ROI rectangles, and per-eye focus scores with a delta indicator (turns red when left/right diverge). Scores are also printed to stdout once per second for logging.
 
-#### AprilTag Detection
-
-When `--tag-size` is specified, the stream runs [AprilTag3](https://github.com/AprilRobotics/apriltag) detection (tagStandard52h13 family) on each eye's raw grayscale frame before gamma correction. For each detection the tag ID, center, 6-DOF pose (rotation matrix + translation), and error are printed to stdout.
-
-Detected tags are highlighted in the SDL2 preview with a green quadrilateral connecting the four corner points. Camera intrinsics are derived from the IMX273 pixel pitch and 3 mm lens focal length, adjusted for the active binning level.
+Press `q` or `Esc` to quit.
 
 ### Shell completions
 
