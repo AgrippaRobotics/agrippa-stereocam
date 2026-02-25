@@ -3,6 +3,7 @@
  *
  * Continuously captures DualBayerRG8 frames, debayers each eye,
  * and displays them side-by-side in an SDL2 window.
+ * Optionally detects AprilTags and estimates their pose.
  */
 
 #include "common.h"
@@ -15,6 +16,13 @@
 
 #include <SDL2/SDL.h>
 
+#ifdef HAVE_APRILTAG
+#include <apriltag.h>
+#include <apriltag_pose.h>
+#include <tagStandard52h13.h>
+#include <common/image_u8.h>
+#endif
+
 static volatile sig_atomic_t g_quit = 0;
 
 static void
@@ -24,9 +32,72 @@ sigint_handler (int sig)
     g_quit = 1;
 }
 
+#ifdef HAVE_APRILTAG
+/* IMX273 sensor: 3.45 µm pixel pitch, 3 mm lens. */
+#define AG_PIXEL_PITCH_UM  3.45
+#define AG_LENS_FL_UM      3000.0  /* 3 mm */
+
+static void
+detect_tags_and_pose (apriltag_detector_t *detector, const guint8 *gray,
+                      guint width, guint height, double tag_size_m,
+                      double fx, double fy, double cx, double cy,
+                      guint64 frame_num, const char *eye_label)
+{
+    image_u8_t im = {
+        .width  = (int32_t) width,
+        .height = (int32_t) height,
+        .stride = (int32_t) width,
+        .buf    = (uint8_t *) gray
+    };
+
+    zarray_t *detections = apriltag_detector_detect (detector, &im);
+
+    for (int i = 0; i < zarray_size (detections); i++) {
+        apriltag_detection_t *det;
+        zarray_get (detections, i, &det);
+
+        apriltag_detection_info_t info = {
+            .det     = det,
+            .tagsize = tag_size_m,
+            .fx      = fx,
+            .fy      = fy,
+            .cx      = cx,
+            .cy      = cy
+        };
+
+        apriltag_pose_t pose;
+        double pose_err = estimate_tag_pose (&info, &pose);
+
+        printf ("apriltag frame=%" G_GUINT64_FORMAT
+                " eye=%s id=%d hamming=%d margin=%.1f"
+                " center=(%.1f,%.1f)"
+                " err=%.2e"
+                " R=[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]"
+                " t=[%.4f,%.4f,%.4f]\n",
+                frame_num, eye_label,
+                det->id, det->hamming, det->decision_margin,
+                det->c[0], det->c[1],
+                pose_err,
+                matd_get (pose.R, 0, 0), matd_get (pose.R, 0, 1),
+                matd_get (pose.R, 0, 2), matd_get (pose.R, 1, 0),
+                matd_get (pose.R, 1, 1), matd_get (pose.R, 1, 2),
+                matd_get (pose.R, 2, 0), matd_get (pose.R, 2, 1),
+                matd_get (pose.R, 2, 2),
+                matd_get (pose.t, 0, 0), matd_get (pose.t, 1, 0),
+                matd_get (pose.t, 2, 0));
+
+        matd_destroy (pose.R);
+        matd_destroy (pose.t);
+    }
+
+    apriltag_detections_destroy (detections);
+}
+#endif /* HAVE_APRILTAG */
+
 static int
 stream_loop (const char *device_id, const char *iface_ip,
-             double fps, double exposure_us, int binning)
+             double fps, double exposure_us, int binning,
+             double tag_size_m)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -58,6 +129,37 @@ stream_loop (const char *device_id, const char *iface_ip,
     guint proc_h     = src_h     / (guint) cfg.software_binning;
     guint display_w  = proc_sub_w * 2;
     guint display_h  = proc_h;
+
+#ifdef HAVE_APRILTAG
+    /* AprilTag detector setup. */
+    apriltag_detector_t *at_detector = NULL;
+    apriltag_family_t   *at_family   = NULL;
+    double at_fx = 0, at_fy = 0, at_cx = 0, at_cy = 0;
+
+    if (tag_size_m > 0.0) {
+        at_family   = tagStandard52h13_create ();
+        at_detector = apriltag_detector_create ();
+        apriltag_detector_add_family (at_detector, at_family);
+
+        at_detector->quad_decimate   = 1.5f;
+        at_detector->quad_sigma      = 0.0f;
+        at_detector->nthreads        = 1;
+        at_detector->refine_edges    = 1;
+        at_detector->decode_sharpening = 0.25;
+
+        double total_bin = (double) (AG_SENSOR_WIDTH / 2) / (double) proc_sub_w;
+        at_fx = AG_LENS_FL_UM / (AG_PIXEL_PITCH_UM * total_bin);
+        at_fy = at_fx;
+        at_cx = (double) proc_sub_w / 2.0;
+        at_cy = (double) proc_h / 2.0;
+
+        printf ("AprilTag: tagStandard52h13, tag_size=%.3f m, "
+                "fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n",
+                tag_size_m, at_fx, at_fy, at_cx, at_cy);
+    }
+#else
+    (void) tag_size_m;
+#endif
 
     /* SDL2 setup. */
     if (SDL_Init (SDL_INIT_VIDEO) != 0) {
@@ -218,6 +320,20 @@ stream_loop (const char *device_id, const char *iface_ip,
             memcpy (bayer_right, bayer_right_src, (size_t) src_sub_w * src_h);
         }
 
+#ifdef HAVE_APRILTAG
+        /* Detect tags on raw grayscale (before gamma), both eyes. */
+        if (at_detector) {
+            detect_tags_and_pose (at_detector, bayer_left,
+                                 proc_sub_w, proc_h, tag_size_m,
+                                 at_fx, at_fy, at_cx, at_cy,
+                                 frames_displayed, "left");
+            detect_tags_and_pose (at_detector, bayer_right,
+                                 proc_sub_w, proc_h, tag_size_m,
+                                 at_fx, at_fy, at_cx, at_cy,
+                                 frames_displayed, "right");
+        }
+#endif
+
         size_t eye_n = (size_t) proc_sub_w * (size_t) proc_h;
         apply_lut_inplace (bayer_left,  eye_n, gamma_lut);
         apply_lut_inplace (bayer_right, eye_n, gamma_lut);
@@ -274,6 +390,12 @@ cleanup:
     SDL_DestroyRenderer (renderer);
     SDL_DestroyWindow (window);
     SDL_Quit ();
+#ifdef HAVE_APRILTAG
+    if (at_detector) {
+        apriltag_detector_destroy (at_detector);
+        tagStandard52h13_destroy (at_family);
+    }
+#endif
     g_object_unref (cfg.stream);
     g_object_unref (camera);
     arv_shutdown ();
@@ -298,10 +420,20 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "exposure time in microseconds");
     struct arg_int *binning_a = arg_int0 ("b", "binning",   "<1|2>",
                                           "sensor binning factor (default: 1)");
+#ifdef HAVE_APRILTAG
+    struct arg_dbl *tag_size  = arg_dbl0 ("t", "tag-size",  "<meters>",
+                                          "AprilTag size in meters (enables detection)");
+#endif
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
+
+#ifdef HAVE_APRILTAG
+    void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
+                         binning_a, tag_size, help, end };
+#else
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
                          binning_a, help, end };
+#endif
 
     int exitcode = EXIT_SUCCESS;
     if (arg_nullcheck (argtable) != 0) {
@@ -349,6 +481,18 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
         goto done;
     }
 
+    double tag_size_m = 0.0;
+#ifdef HAVE_APRILTAG
+    if (tag_size->count) {
+        tag_size_m = tag_size->dval[0];
+        if (tag_size_m <= 0.0) {
+            arg_dstr_catf (res, "error: --tag-size must be positive\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+    }
+#endif
+
     const char *opt_serial    = serial->count    ? serial->sval[0]    : NULL;
     const char *opt_address   = address->count   ? address->sval[0]   : NULL;
     const char *opt_interface = interface->count  ? interface->sval[0] : NULL;
@@ -363,7 +507,8 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                        opt_interface, TRUE);
     if (!device_id) { exitcode = EXIT_FAILURE; goto done; }
 
-    exitcode = stream_loop (device_id, iface_ip, fps, exposure_us, binning);
+    exitcode = stream_loop (device_id, iface_ip, fps, exposure_us, binning,
+                            tag_size_m);
     g_free (device_id);
 
 done:
