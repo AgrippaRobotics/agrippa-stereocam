@@ -37,11 +37,19 @@ sigint_handler (int sig)
 #define AG_PIXEL_PITCH_UM  3.45
 #define AG_LENS_FL_UM      3000.0  /* 3 mm */
 
-static void
+/* Corners of one detected tag (pixel coords within a single eye). */
+typedef struct {
+    double p[4][2];   /* corner points, counter-clockwise */
+} TagOverlay;
+
+#define MAX_TAG_OVERLAYS  32
+
+static int
 detect_tags_and_pose (apriltag_detector_t *detector, const guint8 *gray,
                       guint width, guint height, double tag_size_m,
                       double fx, double fy, double cx, double cy,
-                      guint64 frame_num, const char *eye_label)
+                      guint64 frame_num, const char *eye_label,
+                      TagOverlay *overlays, int max_overlays)
 {
     image_u8_t im = {
         .width  = (int32_t) width,
@@ -51,6 +59,7 @@ detect_tags_and_pose (apriltag_detector_t *detector, const guint8 *gray,
     };
 
     zarray_t *detections = apriltag_detector_detect (detector, &im);
+    int n_overlays = 0;
 
     for (int i = 0; i < zarray_size (detections); i++) {
         apriltag_detection_t *det;
@@ -86,11 +95,21 @@ detect_tags_and_pose (apriltag_detector_t *detector, const guint8 *gray,
                 matd_get (pose.t, 0, 0), matd_get (pose.t, 1, 0),
                 matd_get (pose.t, 2, 0));
 
+        /* Store corner points for overlay rendering. */
+        if (n_overlays < max_overlays) {
+            for (int c = 0; c < 4; c++) {
+                overlays[n_overlays].p[c][0] = det->p[c][0];
+                overlays[n_overlays].p[c][1] = det->p[c][1];
+            }
+            n_overlays++;
+        }
+
         matd_destroy (pose.R);
         matd_destroy (pose.t);
     }
 
     apriltag_detections_destroy (detections);
+    return n_overlays;
 }
 #endif /* HAVE_APRILTAG */
 
@@ -322,15 +341,21 @@ stream_loop (const char *device_id, const char *iface_ip,
 
 #ifdef HAVE_APRILTAG
         /* Detect tags on raw grayscale (before gamma), both eyes. */
+        int n_left_tags = 0, n_right_tags = 0;
+        TagOverlay left_tags[MAX_TAG_OVERLAYS], right_tags[MAX_TAG_OVERLAYS];
         if (at_detector) {
-            detect_tags_and_pose (at_detector, bayer_left,
-                                 proc_sub_w, proc_h, tag_size_m,
-                                 at_fx, at_fy, at_cx, at_cy,
-                                 frames_displayed, "left");
-            detect_tags_and_pose (at_detector, bayer_right,
-                                 proc_sub_w, proc_h, tag_size_m,
-                                 at_fx, at_fy, at_cx, at_cy,
-                                 frames_displayed, "right");
+            n_left_tags = detect_tags_and_pose (
+                at_detector, bayer_left,
+                proc_sub_w, proc_h, tag_size_m,
+                at_fx, at_fy, at_cx, at_cy,
+                frames_displayed, "left",
+                left_tags, MAX_TAG_OVERLAYS);
+            n_right_tags = detect_tags_and_pose (
+                at_detector, bayer_right,
+                proc_sub_w, proc_h, tag_size_m,
+                at_fx, at_fy, at_cx, at_cy,
+                frames_displayed, "right",
+                right_tags, MAX_TAG_OVERLAYS);
         }
 #endif
 
@@ -358,6 +383,46 @@ stream_loop (const char *device_id, const char *iface_ip,
 
         SDL_RenderClear (renderer);
         SDL_RenderCopy (renderer, texture, NULL, NULL);
+
+#ifdef HAVE_APRILTAG
+        /* Draw detected tag outlines as quadrilaterals.
+         * Tag corner coords are in per-eye pixel space; we must map them
+         * to the renderer's logical output which may be scaled by the
+         * window size.  SDL_RenderCopy stretches the texture to fill the
+         * output, so we apply the same scale. */
+        if (n_left_tags || n_right_tags) {
+            int out_w, out_h;
+            SDL_GetRendererOutputSize (renderer, &out_w, &out_h);
+            double sx = (double) out_w / (double) display_w;
+            double sy = (double) out_h / (double) display_h;
+
+            SDL_SetRenderDrawColor (renderer, 0, 255, 0, 255);
+
+            for (int t = 0; t < n_left_tags; t++) {
+                for (int c = 0; c < 4; c++) {
+                    int nc = (c + 1) % 4;
+                    SDL_RenderDrawLine (renderer,
+                        (int) (left_tags[t].p[c][0]  * sx),
+                        (int) (left_tags[t].p[c][1]  * sy),
+                        (int) (left_tags[t].p[nc][0] * sx),
+                        (int) (left_tags[t].p[nc][1] * sy));
+                }
+            }
+
+            for (int t = 0; t < n_right_tags; t++) {
+                double x_off = (double) proc_sub_w;
+                for (int c = 0; c < 4; c++) {
+                    int nc = (c + 1) % 4;
+                    SDL_RenderDrawLine (renderer,
+                        (int) ((right_tags[t].p[c][0]  + x_off) * sx),
+                        (int) ( right_tags[t].p[c][1]           * sy),
+                        (int) ((right_tags[t].p[nc][0] + x_off) * sx),
+                        (int) ( right_tags[t].p[nc][1]          * sy));
+                }
+            }
+        }
+#endif
+
         SDL_RenderPresent (renderer);
 
         frames_displayed++;

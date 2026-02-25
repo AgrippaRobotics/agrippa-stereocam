@@ -67,9 +67,9 @@ ag-cam-tools capture -a 192.168.0.201 -e png -b 2 -x 50000 -v
 ### `stream`
 
 ```bash
-ag-cam-tools stream -a 192.168.0.201 -r 10
-ag-cam-tools stream -a 192.168.0.201 -r 5 -b 2 -x 30000
-ag-cam-tools stream -a 192.168.0.201 -f tag36h11
+ag-cam-tools stream -a 192.168.0.201 -f 10
+ag-cam-tools stream -a 192.168.0.201 -f 5 -b 2 -x 30000
+ag-cam-tools stream -a 192.168.0.201 -t 0.162   # enable AprilTag detection
 ```
 
 | Option | Description |
@@ -77,13 +77,18 @@ ag-cam-tools stream -a 192.168.0.201 -f tag36h11
 | `-s`, `--serial` | Match camera by serial number |
 | `-a`, `--address` | Connect by camera IP address |
 | `-i`, `--interface` | Force NIC selection |
-| `-r`, `--fps` | Trigger rate in Hz (default: 10) |
-| `-f`, `--apriltag-family` | Enable apriltag detection and choose family (`tag16h5`, `tag25h9`, `tag36h10`, `tag36h11`) |
+| `-f`, `--fps` | Trigger rate in Hz (default: 10) |
+| `-t`, `--tag-size` | AprilTag size in meters (enables detection) |
 | `-x`, `--exposure` | Exposure time in microseconds |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
 
 Press `q` or `Esc` to quit the stream window.
-When AprilTag detection is enabled, detections are printed to stdout per frame/eye.
+
+#### AprilTag Detection
+
+When `--tag-size` is specified, the stream runs [AprilTag3](https://github.com/AprilRobotics/apriltag) detection (tagStandard52h13 family) on each eye's raw grayscale frame before gamma correction. For each detection the tag ID, center, 6-DOF pose (rotation matrix + translation), and error are printed to stdout.
+
+Detected tags are highlighted in the SDL2 preview with a green quadrilateral connecting the four corner points. Camera intrinsics are derived from the IMX273 pixel pitch and 3 mm lens focal length, adjusted for the active binning level.
 
 ### Shell completions
 
