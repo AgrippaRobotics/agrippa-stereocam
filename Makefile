@@ -25,6 +25,29 @@ VENDOR_SRCS = $(VENDORDIR)/argtable3.c
 OBJS        = $(patsubst $(SRCDIR)/%.c,$(BINDIR)/%.o,$(SRCS))
 VENDOR_OBJS = $(patsubst $(VENDORDIR)/%.c,$(BINDIR)/%.o,$(VENDOR_SRCS))
 
+# --- AprilTag: prefer system install, fall back to vendor submodule ---
+APRILTAG_SYSTEM_CFLAGS := $(shell pkg-config --cflags apriltag 2>/dev/null)
+APRILTAG_SYSTEM_LIBS   := $(shell pkg-config --libs   apriltag 2>/dev/null)
+
+ifneq ($(APRILTAG_SYSTEM_LIBS),)
+  # System-installed apriltag found via pkg-config
+  CFLAGS += $(APRILTAG_SYSTEM_CFLAGS) -DHAVE_APRILTAG=1
+  LIBS   += $(APRILTAG_SYSTEM_LIBS)
+else ifneq ($(wildcard $(VENDORDIR)/apriltag/apriltag.h),)
+  # Vendor submodule present — build minimal static library
+  CFLAGS += -I$(VENDORDIR)/apriltag -DHAVE_APRILTAG=1
+  LIBS   += -lpthread
+
+  APRILTAG_DIR  = $(VENDORDIR)/apriltag
+  APRILTAG_LIB  = $(BINDIR)/libapriltag.a
+  APRILTAG_SRCS = $(APRILTAG_DIR)/apriltag.c \
+                  $(APRILTAG_DIR)/apriltag_quad_thresh.c \
+                  $(APRILTAG_DIR)/apriltag_pose.c \
+                  $(APRILTAG_DIR)/tagStandard52h13.c \
+                  $(wildcard $(APRILTAG_DIR)/common/*.c)
+  APRILTAG_OBJS = $(patsubst $(APRILTAG_DIR)/%.c,$(BINDIR)/apriltag/%.o,$(APRILTAG_SRCS))
+endif
+
 PREFIX     ?= /usr/local
 BASHCOMPDIR ?= $(PREFIX)/share/bash-completion/completions
 ZSHCOMPDIR  ?= $(PREFIX)/share/zsh/site-functions
@@ -42,8 +65,17 @@ $(BINDIR)/%.o: $(SRCDIR)/%.c | $(BINDIR)
 $(BINDIR)/argtable3.o: $(VENDORDIR)/argtable3.c | $(BINDIR)
 	$(CC) -Wall -O2 -c -o $@ $<
 
-$(TARGET): $(OBJS) $(VENDOR_OBJS)
-	$(CC) -o $@ $^ $(LIBS)
+# AprilTag vendor object compilation
+$(BINDIR)/apriltag/%.o: $(APRILTAG_DIR)/%.c | $(BINDIR)
+	@mkdir -p $(dir $@)
+	$(CC) -Wall -O2 -I$(APRILTAG_DIR) -c -o $@ $<
+
+# AprilTag vendor static library
+$(APRILTAG_LIB): $(APRILTAG_OBJS)
+	$(AR) rcs $@ $^
+
+$(TARGET): $(OBJS) $(VENDOR_OBJS) $(APRILTAG_LIB)
+	$(CC) -o $@ $(OBJS) $(VENDOR_OBJS) $(if $(APRILTAG_LIB),-L$(BINDIR) -lapriltag) $(LIBS)
 	codesign --force --sign - $@ 2>/dev/null || true
 
 install: $(TARGET)
