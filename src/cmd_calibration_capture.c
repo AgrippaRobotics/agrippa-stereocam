@@ -23,7 +23,61 @@
 
 #include <SDL2/SDL.h>
 
+#include "beep_wav.h"
+
 static volatile sig_atomic_t g_quit = 0;
+
+/* Audio state for the capture confirmation beep. */
+static SDL_AudioDeviceID g_audio_dev = 0;
+static Uint8            *g_beep_buf  = NULL;
+static Uint32            g_beep_len  = 0;
+
+static void
+audio_init (void)
+{
+    SDL_RWops *rw = SDL_RWFromConstMem (ag_beep_wav, (int) ag_beep_wav_len);
+    if (!rw)
+        return;
+
+    SDL_AudioSpec spec;
+    if (!SDL_LoadWAV_RW (rw, 1 /* free rw */, &spec, &g_beep_buf, &g_beep_len)) {
+        fprintf (stderr, "warn: SDL_LoadWAV: %s\n", SDL_GetError ());
+        return;
+    }
+
+    g_audio_dev = SDL_OpenAudioDevice (NULL, 0, &spec, NULL, 0);
+    if (!g_audio_dev) {
+        fprintf (stderr, "warn: SDL_OpenAudioDevice: %s\n", SDL_GetError ());
+        SDL_FreeWAV (g_beep_buf);
+        g_beep_buf = NULL;
+        return;
+    }
+
+    /* Unpause so queued audio plays immediately. */
+    SDL_PauseAudioDevice (g_audio_dev, 0);
+}
+
+static void
+audio_play_beep (void)
+{
+    if (g_audio_dev && g_beep_buf) {
+        SDL_ClearQueuedAudio (g_audio_dev);
+        SDL_QueueAudio (g_audio_dev, g_beep_buf, g_beep_len);
+    }
+}
+
+static void
+audio_cleanup (void)
+{
+    if (g_audio_dev) {
+        SDL_CloseAudioDevice (g_audio_dev);
+        g_audio_dev = 0;
+    }
+    if (g_beep_buf) {
+        SDL_FreeWAV (g_beep_buf);
+        g_beep_buf = NULL;
+    }
+}
 
 static void
 sigint_handler (int sig)
@@ -83,8 +137,8 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
         return EXIT_FAILURE;
     }
 
-    /* SDL2 setup. */
-    if (SDL_Init (SDL_INIT_VIDEO) != 0) {
+    /* SDL2 setup (video + audio for capture beep). */
+    if (SDL_Init (SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         fprintf (stderr, "error: SDL_Init: %s\n", SDL_GetError ());
         g_free (left_dir);
         g_free (right_dir);
@@ -145,6 +199,9 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
         arv_shutdown ();
         return EXIT_FAILURE;
     }
+
+    /* Audio feedback for successful captures. */
+    audio_init ();
 
     /* Scratch buffers. */
     guint8 *rgb_left        = g_malloc ((size_t) proc_sub_w * proc_h * 3);
@@ -283,6 +340,7 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
 
             if (rc_left == EXIT_SUCCESS && rc_right == EXIT_SUCCESS) {
                 saved_count++;
+                audio_play_beep ();
                 printf ("  Saved pair %d / %d\n", saved_count, target_count);
 
                 snprintf (title, sizeof title,
@@ -352,6 +410,7 @@ cleanup:
     g_free (rgb_right);
     g_free (left_dir);
     g_free (right_dir);
+    audio_cleanup ();
     SDL_DestroyTexture (texture);
     SDL_DestroyRenderer (renderer);
     SDL_DestroyWindow (window);
