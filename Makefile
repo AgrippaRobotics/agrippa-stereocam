@@ -20,7 +20,8 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/cmd_list.c \
        $(SRCDIR)/cmd_capture.c \
        $(SRCDIR)/cmd_stream.c \
-       $(SRCDIR)/cmd_focus.c
+       $(SRCDIR)/cmd_focus.c \
+       $(SRCDIR)/cmd_calibration_capture.c
 
 VENDOR_SRCS = $(VENDORDIR)/argtable3.c
 

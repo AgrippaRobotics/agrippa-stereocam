@@ -8,7 +8,7 @@ _ag_cam_tools() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    subcmds="connect list capture stream focus"
+    subcmds="connect list capture stream focus calibration-capture"
 
     # Complete subcommand as first argument
     if [[ ${COMP_CWORD} -eq 1 ]]; then
@@ -57,6 +57,9 @@ _ag_cam_tools() {
             ;;
         focus)
             COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -f --fps -x --exposure -b --binning --roi -h --help" -- "${cur}") )
+            ;;
+        calibration-capture)
+            COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -o --output -n --count -f --fps -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size -h --help" -- "${cur}") )
             ;;
     esac
 }

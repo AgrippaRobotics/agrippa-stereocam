@@ -30,6 +30,7 @@ ag-cam-tools <command> [options]
 | `capture` | Capture a single stereo frame pair |
 | `stream` | Real-time stereo preview via SDL2 |
 | `focus` | Real-time focus scoring for lens adjustment |
+| `calibration-capture` | Interactive stereo pair capture for calibration |
 
 ### `list`
 
@@ -121,6 +122,33 @@ ag-cam-tools focus -a 192.168.0.201 -A -b 2                 # auto-expose then f
 The SDL window shows: live stereo preview, green ROI rectangles, and per-eye focus scores with a delta indicator (turns red when left/right diverge). Scores are also printed to stdout once per second for logging.
 
 Press `q` or `Esc` to quit.
+
+### `calibration-capture`
+
+Interactive capture session for building a stereo calibration image set. Shows a live side-by-side preview and saves left/right PNG pairs into `stereoLeft/` and `stereoRight/` on keypress, matching the layout expected by `2.Calibration.ipynb`.
+
+```bash
+ag-cam-tools calibration-capture -a 192.168.0.201 -A           # auto-expose, 30 pairs target
+ag-cam-tools calibration-capture -a 192.168.0.201 -A -n 40     # 40 pairs target
+ag-cam-tools calibration-capture -a 192.168.0.201 -x 30000 -g 6 -o ./calib_session
+ag-cam-tools calibration-capture -a 192.168.0.201 -A -b 2      # use 2:1 binning (720×540)
+```
+
+| Option | Description |
+|--------|-------------|
+| `-s`, `--serial` | Match camera by serial number |
+| `-a`, `--address` | Connect by camera IP address |
+| `-i`, `--interface` | Force NIC selection |
+| `-o`, `--output` | Base output directory (default: current) |
+| `-n`, `--count` | Target number of pairs (default: 30) |
+| `-f`, `--fps` | Preview rate in Hz (default: 10) |
+| `-x`, `--exposure` | Exposure time in microseconds |
+| `-g`, `--gain` | Sensor gain in dB (0-48; 0-24 analog, 24-48 digital) |
+| `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
+| `-b`, `--binning` | Sensor binning factor: `1` (default) or `2` |
+| `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
+
+Press `s` to save the current pair, `q` or `Esc` to quit. The window title shows the running count. Images are saved as `imageL{N}.png` / `imageR{N}.png` (0-indexed).
 
 ### Shell completions
 

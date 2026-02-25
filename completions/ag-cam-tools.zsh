@@ -76,6 +76,24 @@ _ag_cam_tools_focus() {
         '(-h --help)'{-h,--help}'[print this help]'
 }
 
+_ag_cam_tools_calibration_capture() {
+    _arguments \
+        '(-a --address)-s[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-a --address)--serial=[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-s --serial)-a[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-s --serial)--address=[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-i --interface)'{-i,--interface}'=[force NIC selection]:interface:_net_interfaces' \
+        '(-o --output)'{-o,--output}'=[base output directory]:directory:_directories' \
+        '(-n --count)'{-n,--count}'=[target number of pairs]:count:' \
+        '(-f --fps)'{-f,--fps}'=[preview rate in Hz]:rate:' \
+        '(-x --exposure)'{-x,--exposure}'=[exposure time in microseconds]:microseconds:' \
+        '(-g --gain)'{-g,--gain}'=[sensor gain in dB]:gain:' \
+        '(-A --auto-expose)'{-A,--auto-expose}'[auto-expose then lock]' \
+        '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
+        '(-p --packet-size)'{-p,--packet-size}'=[GigE packet size]:bytes:' \
+        '(-h --help)'{-h,--help}'[print this help]'
+}
+
 _ag_cam_tools() {
     local -a subcmds
     subcmds=(
@@ -84,6 +102,7 @@ _ag_cam_tools() {
         'capture:Capture a single stereo frame pair'
         'stream:Real-time stereo preview via SDL2'
         'focus:Real-time focus scoring for lens adjustment'
+        'calibration-capture:Interactive stereo pair capture for calibration'
     )
 
     if (( CURRENT == 2 )); then
@@ -95,6 +114,7 @@ _ag_cam_tools() {
             capture) _ag_cam_tools_capture ;;
             stream)  _ag_cam_tools_stream ;;
             focus)   _ag_cam_tools_focus ;;
+            calibration-capture) _ag_cam_tools_calibration_capture ;;
         esac
     fi
 }
