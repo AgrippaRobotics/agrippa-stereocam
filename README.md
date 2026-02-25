@@ -77,6 +77,7 @@ ag-cam-tools stream -a 192.168.0.201 -f 10
 ag-cam-tools stream -a 192.168.0.201 -f 5 -b 2 -x 30000 -g 12
 ag-cam-tools stream -a 192.168.0.201 -A -f 10              # auto-expose then stream
 ag-cam-tools stream -a 192.168.0.201 -t 0.05               # AprilTag detection (5cm tags)
+ag-cam-tools stream -a 192.168.0.201 -r calibration/calibration_20260225_143015_a1b2c3d4
 ```
 
 | Option | Description |
@@ -90,10 +91,13 @@ ag-cam-tools stream -a 192.168.0.201 -t 0.05               # AprilTag detection 
 | `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
 | `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
+| `-r`, `--rectify` | Rectify using calibration session folder (loads `calib_result/remap_*.bin`) |
 | `-t`, `--tag-size` | AprilTag size in meters (enables tagStandard52h13 detection) |
 
 Press `q` or `Esc` to quit the stream window.
 When AprilTag detection is enabled, detections are printed to stdout per frame/eye.
+
+When `--rectify` is given, the stream applies real-time undistortion and rectification using pre-computed remap tables exported by `2.Calibration.ipynb`. The argument is the path to a calibration session folder (e.g. `calibration/calibration_20260225_143015_a1b2c3d4`); the tool loads `calib_result/remap_left.bin` and `calib_result/remap_right.bin` from within it. On ARM64 (Apple Silicon, Jetson) the remap uses NEON SIMD acceleration.
 
 ### `focus`
 

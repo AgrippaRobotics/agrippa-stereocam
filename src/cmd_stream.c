@@ -7,6 +7,7 @@
  */
 
 #include "common.h"
+#include "remap.h"
 #include "../vendor/argtable3.h"
 
 #include <signal.h>
@@ -117,7 +118,7 @@ static int
 stream_loop (const char *device_id, const char *iface_ip,
              double fps, double exposure_us, double gain_db,
              gboolean auto_expose, int packet_size, int binning,
-             double tag_size_m)
+             double tag_size_m, const char *rectify_path)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -239,6 +240,45 @@ stream_loop (const char *device_id, const char *iface_ip,
     guint8 *bayer_right_src = g_malloc ((size_t) src_sub_w  * src_h);
     guint8 *bayer_left      = g_malloc ((size_t) proc_sub_w * proc_h);
     guint8 *bayer_right     = g_malloc ((size_t) proc_sub_w * proc_h);
+
+    /* Load rectification remap tables (optional). */
+    AgRemapTable *remap_left  = NULL;
+    AgRemapTable *remap_right = NULL;
+    guint8 *rect_left  = NULL;
+    guint8 *rect_right = NULL;
+
+    if (rectify_path) {
+        char *lpath = g_build_filename (rectify_path, "calib_result",
+                                        "remap_left.bin", NULL);
+        char *rpath = g_build_filename (rectify_path, "calib_result",
+                                        "remap_right.bin", NULL);
+        remap_left  = ag_remap_table_load (lpath);
+        remap_right = ag_remap_table_load (rpath);
+        g_free (lpath);
+        g_free (rpath);
+
+        if (!remap_left || !remap_right) {
+            fprintf (stderr, "error: failed to load remap tables from %s\n",
+                     rectify_path);
+            goto cleanup;
+        }
+        if (remap_left->width != proc_sub_w || remap_left->height != proc_h) {
+            fprintf (stderr,
+                     "error: remap dimensions %ux%u do not match frame %ux%u\n",
+                     remap_left->width, remap_left->height,
+                     proc_sub_w, proc_h);
+            goto cleanup;
+        }
+
+        rect_left  = g_malloc ((size_t) proc_sub_w * proc_h * 3);
+        rect_right = g_malloc ((size_t) proc_sub_w * proc_h * 3);
+        printf ("Rectification enabled (%ux%u maps loaded).\n",
+                proc_sub_w, proc_h);
+    }
+
+    /* Pointers used for SDL upload — either raw or rectified. */
+    const guint8 *display_left  = remap_left ? rect_left  : rgb_left;
+    const guint8 *display_right = remap_left ? rect_right : rgb_right;
 
     /* Start acquisition. */
     printf ("Starting acquisition at %.1f Hz...\n", fps);
@@ -371,15 +411,23 @@ stream_loop (const char *device_id, const char *iface_ip,
         debayer_rg8_to_rgb (bayer_left,  rgb_left,  proc_sub_w, proc_h);
         debayer_rg8_to_rgb (bayer_right, rgb_right, proc_sub_w, proc_h);
 
+        if (remap_left) {
+            ag_remap_rgb (remap_left,  rgb_left,  rect_left);
+            ag_remap_rgb (remap_right, rgb_right, rect_right);
+        }
+
         /* Upload to SDL texture. */
         void *tex_pixels;
         int tex_pitch;
         if (SDL_LockTexture (texture, NULL, &tex_pixels, &tex_pitch) == 0) {
             for (guint y = 0; y < proc_h; y++) {
                 guint8 *dst = (guint8 *) tex_pixels + (size_t) y * (size_t) tex_pitch;
-                memcpy (dst, rgb_left + (size_t) y * proc_sub_w * 3, proc_sub_w * 3);
+                memcpy (dst,
+                        display_left + (size_t) y * proc_sub_w * 3,
+                        proc_sub_w * 3);
                 memcpy (dst + proc_sub_w * 3,
-                        rgb_right + (size_t) y * proc_sub_w * 3, proc_sub_w * 3);
+                        display_right + (size_t) y * proc_sub_w * 3,
+                        proc_sub_w * 3);
             }
             SDL_UnlockTexture (texture);
         }
@@ -450,6 +498,10 @@ stream_loop (const char *device_id, const char *iface_ip,
     arv_camera_stop_acquisition (camera, NULL);
 
 cleanup:
+    g_free (rect_left);
+    g_free (rect_right);
+    ag_remap_table_free (remap_left);
+    ag_remap_table_free (remap_right);
     g_free (bayer_left_src);
     g_free (bayer_right_src);
     g_free (bayer_left);
@@ -496,6 +548,8 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "sensor binning factor (default: 1)");
     struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
                                           "GigE packet size (default: auto-negotiate)");
+    struct arg_str *rectify   = arg_str0 ("r", "rectify",  "<session>",
+                                          "rectify using calibration session folder");
 #ifdef HAVE_APRILTAG
     struct arg_dbl *tag_size  = arg_dbl0 ("t", "tag-size",  "<meters>",
                                           "AprilTag size in meters (enables detection)");
@@ -505,11 +559,12 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
 
 #ifdef HAVE_APRILTAG
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
-                         gain, auto_exp, binning_a, pkt_size, tag_size,
-                         help, end };
+                         gain, auto_exp, binning_a, pkt_size, rectify,
+                         tag_size, help, end };
 #else
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
-                         gain, auto_exp, binning_a, pkt_size, help, end };
+                         gain, auto_exp, binning_a, pkt_size, rectify,
+                         help, end };
 #endif
 
     int exitcode = EXIT_SUCCESS;
@@ -602,9 +657,11 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
     if (!device_id) { exitcode = EXIT_FAILURE; goto done; }
 
     int pkt_sz = pkt_size->count ? pkt_size->ival[0] : 0;
+    const char *opt_rectify = rectify->count ? rectify->sval[0] : NULL;
 
     exitcode = stream_loop (device_id, iface_ip, fps, exposure_us, gain_db,
-                            do_auto_expose, pkt_sz, binning, tag_size_m);
+                            do_auto_expose, pkt_sz, binning, tag_size_m,
+                            opt_rectify);
     g_free (device_id);
 
 done:

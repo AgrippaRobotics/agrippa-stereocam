@@ -17,6 +17,13 @@ _ag_cam_tools_cameras_address() {
     compadd -a addrs
 }
 
+_ag_cam_tools_calib_sessions() {
+    local -a sessions
+    sessions=(${(f)"$(find . calibration -maxdepth 2 -type d -name 'calibration_*' 2>/dev/null | \
+               while read -r d; do [ -d "$d/calib_result" ] && echo "$d"; done)"})
+    compadd -a sessions
+}
+
 _ag_cam_tools_connect() {
     _arguments \
         '(-a --address)-s[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
@@ -58,7 +65,12 @@ _ag_cam_tools_stream() {
         '(-i --interface)'{-i,--interface}'=[force NIC selection]:interface:_net_interfaces' \
         '(-f --fps)'{-f,--fps}'=[trigger rate in Hz]:rate:' \
         '(-x --exposure)'{-x,--exposure}'=[exposure time in microseconds]:microseconds:' \
+        '(-g --gain)'{-g,--gain}'=[sensor gain in dB]:gain:' \
+        '(-A --auto-expose)'{-A,--auto-expose}'[auto-expose then lock]' \
         '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
+        '(-p --packet-size)'{-p,--packet-size}'=[GigE packet size]:bytes:' \
+        '(-r --rectify)'{-r,--rectify}'=[rectify using calibration session]:session:_ag_cam_tools_calib_sessions' \
+        '(-t --tag-size)'{-t,--tag-size}'=[AprilTag size in meters]:meters:' \
         '(-h --help)'{-h,--help}'[print this help]'
 }
 
