@@ -184,19 +184,14 @@ Calibration is performed offline using a pre-captured dataset.
 <!-- DIAGRAM: DETAILED_PARALLEL_OFFLINE_CALIBRATION -->
 ## 6.1 Stereo Calibration Workflow (Parallelized – Offline)
 
+
 ```mermaid
 flowchart TD
 
-%% OFFLINE DATASET
-
-A[(Offline Dataset:
-Stereo Image Pairs
-(Checkerboard Views))]
+A[Offline Dataset<br/>Stereo Image Pairs<br/>Checkerboard Views]
 
 A --> B1[Left Image Set]
 A --> B2[Right Image Set]
-
-%% PARALLEL CORNER DETECTION
 
 subgraph LEFT_PIPELINE [Left Camera Pipeline]
     direction TB
@@ -212,10 +207,7 @@ subgraph RIGHT_PIPELINE [Right Camera Pipeline]
     D2 --> E2[Calibrate Right Intrinsics]
 end
 
-%% MERGE FOR STEREO
-
-E1 --> F[Stereo Calibration
-(Solve R, T)]
+E1 --> F[Stereo Calibration<br/>Solve R and T]
 E2 --> F
 
 F --> G[Stereo Rectification]
