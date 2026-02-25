@@ -5,8 +5,12 @@ Stereo camera toolkit for the [Lucid Phoenix PHD016S](https://thinklucid.com/pro
 ## Building
 
 Dependencies: [Aravis 0.8](https://github.com/AravisProject/aravis), [SDL2](https://www.libsdl.org/), pkg-config.
+AprilTag detection in `stream` uses apriltag3 via:
+- system install (`pkg-config apriltag`) if available, or
+- vendored submodule fallback at `vendor/apriltag`.
 
 ```bash
+git submodule update --init --recursive
 make                # builds bin/ag-cam-tools
 sudo make install   # installs binary + shell completions to /usr/local
 ```
@@ -63,8 +67,9 @@ ag-cam-tools capture -a 192.168.0.201 -e png -b 2 -x 50000 -v
 ### `stream`
 
 ```bash
-ag-cam-tools stream -a 192.168.0.201 -f 10
-ag-cam-tools stream -a 192.168.0.201 -f 5 -b 2 -x 30000
+ag-cam-tools stream -a 192.168.0.201 -r 10
+ag-cam-tools stream -a 192.168.0.201 -r 5 -b 2 -x 30000
+ag-cam-tools stream -a 192.168.0.201 -f tag36h11
 ```
 
 | Option | Description |
@@ -72,11 +77,13 @@ ag-cam-tools stream -a 192.168.0.201 -f 5 -b 2 -x 30000
 | `-s`, `--serial` | Match camera by serial number |
 | `-a`, `--address` | Connect by camera IP address |
 | `-i`, `--interface` | Force NIC selection |
-| `-f`, `--fps` | Trigger rate in Hz (default: 10) |
+| `-r`, `--fps` | Trigger rate in Hz (default: 10) |
+| `-f`, `--apriltag-family` | Enable apriltag detection and choose family (`tag16h5`, `tag25h9`, `tag36h10`, `tag36h11`) |
 | `-x`, `--exposure` | Exposure time in microseconds |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
 
 Press `q` or `Esc` to quit the stream window.
+When AprilTag detection is enabled, detections are printed to stdout per frame/eye.
 
 ### Shell completions
 
@@ -87,6 +94,25 @@ To source manually:
 ```bash
 source completions/ag-cam-tools.bash   # bash
 source completions/ag-cam-tools.zsh    # zsh
+```
+
+## Citation and Attribution
+
+This project is licensed under Apache-2.0 and includes a [NOTICE](NOTICE) file for attribution notices that should be preserved in redistributions and derivative works.
+
+For academic use, citation metadata is provided in [CITATION.cff](CITATION.cff). GitHub and other tooling can automatically generate citations from this file.
+The current Zenodo concept DOI in `CITATION.cff` is a placeholder (`10.5281/zenodo.0000000`) until the first archived release is published.
+
+BibTeX:
+
+```bibtex
+@software{arnold_agrippa_stereocam_2026,
+  author = {Arnold, Adam},
+  title = {agrippa-stereocam},
+  year = {2026},
+  url = {https://github.com/AgrippaRobotics/agrippa-stereocam},
+  license = {Apache-2.0}
+}
 ```
 
 ## Driver

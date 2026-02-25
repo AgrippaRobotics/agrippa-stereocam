@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: "agrippa-stereocam"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+authors:
+  - family-names: Arnold
+    given-names: Adam
+    email: 5604896+arnoldad@users.noreply.github.com
+repository-code: "https://github.com/AgrippaRobotics/agrippa-stereocam"
+doi: "10.5281/zenodo.0000000"
+license: Apache-2.0
+abstract: >-
+  Stereo camera toolkit for the Lucid Phoenix PHD016S dual-head GigE Vision camera,
+  including discovery, capture, and real-time stereo preview.
+keywords:
+  - stereo-vision
+  - computer-vision
+  - gige-vision
+  - aravis
+  - apriltag
+  - robotics
+version: "0.1.0"
+date-released: "2026-02-25"
