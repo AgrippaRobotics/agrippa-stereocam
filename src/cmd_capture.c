@@ -18,7 +18,9 @@
 static int
 capture_one_frame (const char *device_id, const char *output_dir,
                    const char *iface_ip, AgEncFormat enc,
-                   double exposure_us, int binning, gboolean verbose)
+                   double exposure_us, double gain_db,
+                   gboolean auto_expose, int packet_size, int binning,
+                   gboolean verbose)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -34,8 +36,8 @@ capture_one_frame (const char *device_id, const char *output_dir,
 
     AgCameraConfig cfg;
     if (camera_configure (camera, AG_MODE_SINGLE_FRAME,
-                          binning, exposure_us, iface_ip,
-                          verbose, &cfg) != EXIT_SUCCESS) {
+                          binning, exposure_us, gain_db, auto_expose,
+                          packet_size, iface_ip, verbose, &cfg) != EXIT_SUCCESS) {
         g_object_unref (camera);
         arv_shutdown ();
         return EXIT_FAILURE;
@@ -54,6 +56,9 @@ capture_one_frame (const char *device_id, const char *output_dir,
         arv_shutdown ();
         return EXIT_FAILURE;
     }
+
+    if (auto_expose)
+        auto_expose_settle (camera, &cfg, 100000.0);
 
     /* Wait for TriggerArmed. */
     {
@@ -233,14 +238,21 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "output format: pgm, png, jpg (default: pgm)");
     struct arg_dbl *exposure  = arg_dbl0 ("x", "exposure",   "<us>",
                                           "exposure time in microseconds");
+    struct arg_dbl *gain      = arg_dbl0 ("g", "gain",       "<dB>",
+                                          "sensor gain in dB (0-48)");
+    struct arg_lit *auto_exp  = arg_lit0 ("A", "auto-expose",
+                                          "auto-expose then lock");
     struct arg_int *binning_a = arg_int0 ("b", "binning",    "<1|2>",
                                           "sensor binning factor (default: 1)");
+    struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
+                                          "GigE packet size (default: auto-negotiate)");
     struct arg_lit *verbose   = arg_lit0 ("v", "verbose",
                                           "print diagnostic readback");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
     void *argtable[] = { cmd, serial, address, interface, output, encode,
-                         exposure, binning_a, verbose, help, end };
+                         exposure, gain, auto_exp, binning_a, pkt_size,
+                         verbose, help, end };
 
     int exitcode = EXIT_SUCCESS;
     if (arg_nullcheck (argtable) != 0) {
@@ -273,6 +285,23 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
             exitcode = EXIT_FAILURE;
             goto done;
         }
+    }
+
+    double gain_db = -1.0;
+    if (gain->count) {
+        gain_db = gain->dval[0];
+        if (gain_db < 0.0 || gain_db > 48.0) {
+            arg_dstr_catf (res, "error: --gain must be between 0 and 48\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+    }
+
+    gboolean do_auto_expose = auto_exp->count > 0;
+    if (do_auto_expose && (exposure->count || gain->count)) {
+        arg_dstr_catf (res, "error: --auto-expose and --exposure/--gain are mutually exclusive\n");
+        exitcode = EXIT_FAILURE;
+        goto done;
     }
 
     /* Validate binning. */
@@ -315,8 +344,11 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                        opt_interface, TRUE);
     if (!device_id) { exitcode = EXIT_FAILURE; goto done; }
 
+    int pkt_sz = pkt_size->count ? pkt_size->ival[0] : 0;
+
     exitcode = capture_one_frame (device_id, opt_output, iface_ip, enc,
-                                   exposure_us, binning, verbose->count > 0);
+                                   exposure_us, gain_db, do_auto_expose,
+                                   pkt_sz, binning, verbose->count > 0);
     g_free (device_id);
 
 done:

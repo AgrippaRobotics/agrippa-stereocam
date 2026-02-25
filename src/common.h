@@ -62,6 +62,8 @@ gint64   read_integer_feature_or_default (ArvDevice *dev, const char *name,
                                           gint64 fallback);
 gboolean try_get_integer_feature (ArvDevice *dev, const char *name,
                                   gint64 *out_value);
+gboolean try_get_float_feature   (ArvDevice *dev, const char *name,
+                                  double *out_value);
 void     try_execute_optional_command (ArvDevice *dev, const char *name);
 
 /* --- Gamma / LUT --- */
@@ -92,8 +94,18 @@ void software_bin_2x2 (const guint8 *src, guint src_w, guint src_h,
  * The caller must g_object_unref(out->stream) when done.
  */
 int camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
-                      int binning, double exposure_us,
+                      int binning, double exposure_us, double gain_db,
+                      gboolean auto_expose, int packet_size,
                       const char *iface_ip, gboolean verbose,
                       AgCameraConfig *out);
+
+/*
+ * Run a settle-and-lock loop for auto-exposure.  Fires software triggers,
+ * discards frames, and monitors ExposureTime until stable (3 consecutive
+ * readings within 2%).  Then locks ExposureAuto and GainAuto to "Off".
+ * Returns 0 on success.
+ */
+int auto_expose_settle (ArvCamera *camera, AgCameraConfig *cfg,
+                        double trigger_interval_us);
 
 #endif /* AG_COMMON_H */

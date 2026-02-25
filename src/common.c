@@ -301,6 +301,20 @@ try_get_integer_feature (ArvDevice *device, const char *name, gint64 *out_value)
     return TRUE;
 }
 
+gboolean
+try_get_float_feature (ArvDevice *device, const char *name, double *out_value)
+{
+    GError *error = NULL;
+    double value = arv_device_get_float_feature_value (device, name, &error);
+    if (error) {
+        g_clear_error (&error);
+        return FALSE;
+    }
+    if (out_value)
+        *out_value = value;
+    return TRUE;
+}
+
 void
 try_execute_optional_command (ArvDevice *device, const char *name)
 {
@@ -444,7 +458,8 @@ software_bin_2x2 (const guint8 *src, guint src_w, guint src_h,
 
 int
 camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
-                  int binning, double exposure_us,
+                  int binning, double exposure_us, double gain_db,
+                  gboolean auto_expose, int packet_size,
                   const char *iface_ip, gboolean verbose,
                   AgCameraConfig *out)
 {
@@ -515,19 +530,52 @@ camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
 
     try_set_string_feature (device, "PixelFormat", "DualBayerRG8");
 
-    if (exposure_us > 0.0)
-        try_set_float_feature (device, "ExposureTime", exposure_us);
+    /* Exposure / gain. */
+    if (auto_expose) {
+        try_set_string_feature  (device, "ExposureAuto", "Continuous");
+        try_set_integer_feature (device, "TargetBrightness", 128);
+        try_set_float_feature   (device, "ExposureAutoDamping", 50.0);
+        try_set_string_feature  (device, "GainAuto", "Continuous");
+        try_set_float_feature   (device, "GainAutoUpperLimit", 24.0);
+    } else {
+        if (exposure_us > 0.0)
+            try_set_float_feature (device, "ExposureTime", exposure_us);
+        if (gain_db >= 0.0)
+            try_set_float_feature (device, "Gain", gain_db);
+    }
 
     /* Transport. */
     try_set_string_feature  (device, "TransferSelector", "Stream0");
     try_set_integer_feature (device, "TransferSelector", 0);
     try_set_string_feature  (device, "TransferControlMode", "Automatic");
     try_set_string_feature  (device, "TransferQueueMode", "FirstInFirstOut");
-    try_set_integer_feature (device, "GevSCPSPacketSize", 1400);
-
     /* macOS: disable PF_PACKET sockets. */
     arv_camera_gv_set_stream_options (camera,
                                        ARV_GV_STREAM_OPTION_PACKET_SOCKET_DISABLED);
+
+    /* Packet size: auto-negotiate (0) or explicit value. */
+    if (packet_size > 0) {
+        try_set_integer_feature (device, "GevSCPSPacketSize", (gint64) packet_size);
+        arv_camera_gv_set_packet_size (camera, packet_size, &error);
+        if (error) {
+            fprintf (stderr, "warn: set_packet_size(%d) failed: %s\n",
+                     packet_size, error->message);
+            g_clear_error (&error);
+        } else {
+            printf ("  GevSCPSPacketSize = %d (manual)\n", packet_size);
+        }
+    } else {
+        guint negotiated = arv_camera_gv_auto_packet_size (camera, &error);
+        if (error) {
+            fprintf (stderr, "warn: auto_packet_size failed: %s; "
+                     "falling back to 1400\n", error->message);
+            g_clear_error (&error);
+            arv_camera_gv_set_packet_size (camera, 1400, NULL);
+            printf ("  GevSCPSPacketSize = 1400 (fallback)\n");
+        } else {
+            printf ("  GevSCPSPacketSize = %u (auto-negotiated)\n", negotiated);
+        }
+    }
 
     /* Create stream. */
     ArvStream *stream = arv_camera_create_stream (camera, NULL, NULL, &error);
@@ -538,11 +586,13 @@ camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
         return EXIT_FAILURE;
     }
 
+    /* Tight timeouts: fail fast on packet loss rather than stalling the
+     * pipeline.  Dropped frames are preferable to multi-second hangs. */
     if (ARV_IS_GV_STREAM (stream)) {
         g_object_set (stream,
                       "packet-resend",   ARV_GV_STREAM_PACKET_RESEND_ALWAYS,
-                      "packet-timeout",  (guint) 200000,    /* 200 ms */
-                      "frame-retention", (guint) 10000000,  /* 10 s   */
+                      "packet-timeout",  (guint) 20000,     /* 20 ms  */
+                      "frame-retention", (guint) 200000,    /* 200 ms */
                       NULL);
         if (verbose) {
             guint pt = 0, fr = 0;
@@ -574,14 +624,6 @@ camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
                 try_set_integer_feature (device, "GevSCDA", scda_val);
                 printf ("  Forced GevSCDA -> %s (unicast)\n", host_ip);
             }
-        }
-        arv_camera_gv_set_packet_size (camera, 1400, &error);
-        if (error) {
-            fprintf (stderr, "warn: arv_camera_gv_set_packet_size failed: %s\n",
-                     error->message);
-            g_clear_error (&error);
-        } else {
-            printf ("  arv_camera_gv_set_packet_size(1400) OK\n");
         }
     }
 
@@ -656,5 +698,129 @@ camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
     }
 
     out->stream = stream;
+    return EXIT_SUCCESS;
+}
+
+/* ================================================================== */
+/*  Auto-exposure settle-and-lock                                      */
+/* ================================================================== */
+
+#define AE_MAX_FRAMES    50
+#define AE_HISTORY        3
+#define AE_MIN_FRAMES     8   /* warm-up: let the algorithm run before checking */
+#define AE_TOLERANCE      0.02   /* 2 % */
+
+/*
+ * Fire one software trigger and pop the resulting buffer (discarded).
+ * Returns TRUE if a buffer was successfully received.
+ */
+static gboolean
+ae_trigger_and_discard (ArvDevice *device, AgCameraConfig *cfg,
+                        double trigger_interval_us)
+{
+    /* Wait for TriggerArmed. */
+    gboolean armed = FALSE;
+    for (int p = 0; p < 50 && !armed; p++) {
+        GError *e = NULL;
+        armed = arv_device_get_boolean_feature_value (device,
+                                                      "TriggerArmed", &e);
+        g_clear_error (&e);
+        if (!armed)
+            g_usleep (2000);
+    }
+    if (!armed) {
+        g_usleep ((gulong) trigger_interval_us);
+        return FALSE;
+    }
+
+    /* Fire software trigger. */
+    GError *e = NULL;
+    arv_device_execute_command (device, "TriggerSoftware", &e);
+    if (e) {
+        g_clear_error (&e);
+        g_usleep ((gulong) trigger_interval_us);
+        return FALSE;
+    }
+
+    /* Pop and discard the frame. */
+    ArvBuffer *buf = arv_stream_timeout_pop_buffer (cfg->stream, 2000000);
+    if (buf) {
+        arv_stream_push_buffer (cfg->stream, buf);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+int
+auto_expose_settle (ArvCamera *camera, AgCameraConfig *cfg,
+                    double trigger_interval_us)
+{
+    ArvDevice *device = arv_camera_get_device (camera);
+    double history[AE_HISTORY] = {0};
+    int    filled = 0;
+
+    printf ("Auto-exposure: settling (max %d frames)...\n", AE_MAX_FRAMES);
+
+    for (int i = 0; i < AE_MAX_FRAMES; i++) {
+
+        if (!ae_trigger_and_discard (device, cfg, trigger_interval_us))
+            continue;
+
+        /* Read back current exposure time and gain. */
+        double cur_exp = 0.0, cur_gain = 0.0;
+        try_get_float_feature (device, "ExposureTime", &cur_exp);
+        try_get_float_feature (device, "Gain",         &cur_gain);
+
+        /* Shift into ring buffer. */
+        if (filled < AE_HISTORY) {
+            history[filled++] = cur_exp;
+        } else {
+            for (int j = 0; j < AE_HISTORY - 1; j++)
+                history[j] = history[j + 1];
+            history[AE_HISTORY - 1] = cur_exp;
+        }
+
+        printf ("  frame %d/%d  ExposureTime = %.1f us  Gain = %.1f dB\n",
+                i + 1, AE_MAX_FRAMES, cur_exp, cur_gain);
+
+        /* Only check convergence after the warm-up period. */
+        if (i + 1 >= AE_MIN_FRAMES && filled >= AE_HISTORY) {
+            double mn = history[0], mx = history[0];
+            for (int j = 1; j < AE_HISTORY; j++) {
+                if (history[j] < mn) mn = history[j];
+                if (history[j] > mx) mx = history[j];
+            }
+            if (mx > 0.0 && (mx - mn) / mx < AE_TOLERANCE) {
+                printf ("Auto-exposure: converged after %d frames\n", i + 1);
+                goto lock;
+            }
+        }
+
+        g_usleep ((gulong) trigger_interval_us);
+    }
+
+    fprintf (stderr,
+             "warn: auto-exposure did not converge within %d frames; "
+             "locking current values\n", AE_MAX_FRAMES);
+
+lock:
+    /* Lock exposure and gain. */
+    try_set_string_feature (device, "ExposureAuto", "Off");
+    try_set_string_feature (device, "GainAuto",     "Off");
+
+    /* Read back and report settled values. */
+    double final_exp = 0.0, final_gain = 0.0;
+    try_get_float_feature (device, "ExposureTime", &final_exp);
+    try_get_float_feature (device, "Gain",         &final_gain);
+    printf ("  ExposureTime = %.1f us\n", final_exp);
+    printf ("  Gain         = %.1f dB\n", final_gain);
+
+    /* Allow the camera to stabilise after register writes, then drain
+     * any stale/in-flight buffers so the main loop starts clean. */
+    g_usleep (200000);   /* 200 ms */
+
+    for (int d = 0; d < 3; d++)
+        ae_trigger_and_discard (device, cfg, trigger_interval_us);
+
     return EXIT_SUCCESS;
 }

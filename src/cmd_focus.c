@@ -30,7 +30,8 @@ sigint_handler (int sig)
 
 static int
 focus_loop (const char *device_id, const char *iface_ip,
-            double fps, double exposure_us, int binning,
+            double fps, double exposure_us, double gain_db,
+            gboolean auto_expose, int packet_size, int binning,
             int user_roi_x, int user_roi_y,
             int user_roi_w, int user_roi_h,
             int roi_specified)
@@ -49,8 +50,8 @@ focus_loop (const char *device_id, const char *iface_ip,
 
     AgCameraConfig cfg;
     if (camera_configure (camera, AG_MODE_CONTINUOUS,
-                          binning, exposure_us, iface_ip,
-                          FALSE, &cfg) != EXIT_SUCCESS) {
+                          binning, exposure_us, gain_db, auto_expose,
+                          packet_size, iface_ip, FALSE, &cfg) != EXIT_SUCCESS) {
         g_object_unref (camera);
         arv_shutdown ();
         return EXIT_FAILURE;
@@ -155,6 +156,10 @@ focus_loop (const char *device_id, const char *iface_ip,
     signal (SIGINT, sigint_handler);
 
     guint64 trigger_interval_us = (guint64) (1000000.0 / fps);
+
+    if (auto_expose)
+        auto_expose_settle (camera, &cfg, (double) trigger_interval_us);
+
     guint64 frames_displayed = 0;
     guint64 frames_dropped   = 0;
     const guint8 *gamma_lut  = gamma_lut_2p5 ();
@@ -207,7 +212,7 @@ focus_loop (const char *device_id, const char *iface_ip,
             }
         }
 
-        ArvBuffer *buffer = arv_stream_timeout_pop_buffer (cfg.stream, 2000000);
+        ArvBuffer *buffer = arv_stream_timeout_pop_buffer (cfg.stream, 500000);
         if (!buffer) {
             frames_dropped++;
             continue;
@@ -390,15 +395,22 @@ cmd_focus (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "trigger rate in Hz (default: 10)");
     struct arg_dbl *exposure  = arg_dbl0 ("x", "exposure",  "<us>",
                                           "exposure time in microseconds");
+    struct arg_dbl *gain      = arg_dbl0 ("g", "gain",      "<dB>",
+                                          "sensor gain in dB (0-48)");
+    struct arg_lit *auto_exp  = arg_lit0 ("A", "auto-expose",
+                                          "auto-expose then lock");
     struct arg_int *binning_a = arg_int0 ("b", "binning",   "<1|2>",
                                           "sensor binning factor (default: 1)");
+    struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
+                                          "GigE packet size (default: auto-negotiate)");
     struct arg_int *roi_a     = arg_intn (NULL, "roi", "<x y w h>", 0, 4,
                                           "region of interest (default: center 50%%)");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
 
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
-                         binning_a, roi_a, help, end };
+                         gain, auto_exp, binning_a, pkt_size, roi_a,
+                         help, end };
 
     int exitcode = EXIT_SUCCESS;
     if (arg_nullcheck (argtable) != 0) {
@@ -437,6 +449,23 @@ cmd_focus (int argc, char *argv[], arg_dstr_t res, void *ctx)
             exitcode = EXIT_FAILURE;
             goto done;
         }
+    }
+
+    double gain_db = -1.0;
+    if (gain->count) {
+        gain_db = gain->dval[0];
+        if (gain_db < 0.0 || gain_db > 48.0) {
+            arg_dstr_catf (res, "error: --gain must be between 0 and 48\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+    }
+
+    gboolean do_auto_expose = auto_exp->count > 0;
+    if (do_auto_expose && (exposure->count || gain->count)) {
+        arg_dstr_catf (res, "error: --auto-expose and --exposure/--gain are mutually exclusive\n");
+        exitcode = EXIT_FAILURE;
+        goto done;
     }
 
     int binning = binning_a->ival[0];
@@ -479,7 +508,10 @@ cmd_focus (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                        opt_interface, TRUE);
     if (!device_id) { exitcode = EXIT_FAILURE; goto done; }
 
-    exitcode = focus_loop (device_id, iface_ip, fps, exposure_us, binning,
+    int pkt_sz = pkt_size->count ? pkt_size->ival[0] : 0;
+
+    exitcode = focus_loop (device_id, iface_ip, fps, exposure_us, gain_db,
+                           do_auto_expose, pkt_sz, binning,
                            uroi_x, uroi_y, uroi_w, uroi_h, roi_specified);
     g_free (device_id);
 

@@ -52,6 +52,7 @@ ag-cam-tools connect                    # interactive picker
 ```bash
 ag-cam-tools capture -a 192.168.0.201 -e png -o ./frames
 ag-cam-tools capture -a 192.168.0.201 -e png -b 2 -x 50000 -v
+ag-cam-tools capture -a 192.168.0.201 -A -e png -o ./frames   # auto-expose then capture
 ```
 
 | Option | Description |
@@ -62,15 +63,19 @@ ag-cam-tools capture -a 192.168.0.201 -e png -b 2 -x 50000 -v
 | `-o`, `--output` | Output directory (default: current) |
 | `-e`, `--encode` | Output format: `pgm`, `png`, or `jpg` |
 | `-x`, `--exposure` | Exposure time in microseconds |
+| `-g`, `--gain` | Sensor gain in dB (0-48; 0-24 analog, 24-48 digital) |
+| `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
+| `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
 | `-v`, `--verbose` | Print diagnostic register readback |
 
 ### `stream`
 
 ```bash
-ag-cam-tools stream -a 192.168.0.201 -r 10
-ag-cam-tools stream -a 192.168.0.201 -r 5 -b 2 -x 30000
-ag-cam-tools stream -a 192.168.0.201 -f tag36h11
+ag-cam-tools stream -a 192.168.0.201 -f 10
+ag-cam-tools stream -a 192.168.0.201 -f 5 -b 2 -x 30000 -g 12
+ag-cam-tools stream -a 192.168.0.201 -A -f 10              # auto-expose then stream
+ag-cam-tools stream -a 192.168.0.201 -t 0.05               # AprilTag detection (5cm tags)
 ```
 
 | Option | Description |
@@ -78,10 +83,13 @@ ag-cam-tools stream -a 192.168.0.201 -f tag36h11
 | `-s`, `--serial` | Match camera by serial number |
 | `-a`, `--address` | Connect by camera IP address |
 | `-i`, `--interface` | Force NIC selection |
-| `-r`, `--fps` | Trigger rate in Hz (default: 10) |
-| `-f`, `--apriltag-family` | Enable apriltag detection and choose family (`tag16h5`, `tag25h9`, `tag36h10`, `tag36h11`) |
+| `-f`, `--fps` | Trigger rate in Hz (default: 10) |
 | `-x`, `--exposure` | Exposure time in microseconds |
+| `-g`, `--gain` | Sensor gain in dB (0-48; 0-24 analog, 24-48 digital) |
+| `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
+| `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
+| `-t`, `--tag-size` | AprilTag size in meters (enables tagStandard52h13 detection) |
 
 Press `q` or `Esc` to quit the stream window.
 When AprilTag detection is enabled, detections are printed to stdout per frame/eye.
@@ -93,7 +101,8 @@ Live focus-scoring tool for adjusting M12 camera lenses. Displays the stereo str
 ```bash
 ag-cam-tools focus -a 192.168.0.201              # default: center 50% ROI, 10 Hz
 ag-cam-tools focus -a 192.168.0.201 --roi 200 200 600 400  # custom ROI
-ag-cam-tools focus -a 192.168.0.201 -x 30000 -b 2          # with exposure and binning
+ag-cam-tools focus -a 192.168.0.201 -x 30000 -g 6 -b 2     # with exposure, gain and binning
+ag-cam-tools focus -a 192.168.0.201 -A -b 2                 # auto-expose then focus
 ```
 
 | Option | Description |
@@ -103,7 +112,10 @@ ag-cam-tools focus -a 192.168.0.201 -x 30000 -b 2          # with exposure and b
 | `-i`, `--interface` | Force NIC selection |
 | `-f`, `--fps` | Trigger rate in Hz (default: 10) |
 | `-x`, `--exposure` | Exposure time in microseconds |
+| `-g`, `--gain` | Sensor gain in dB (0-48; 0-24 analog, 24-48 digital) |
+| `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
+| `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
 | `--roi` | Region of interest as `x y w h` pixels (default: center 50%) |
 
 The SDL window shows: live stereo preview, green ROI rectangles, and per-eye focus scores with a delta indicator (turns red when left/right diverge). Scores are also printed to stdout once per second for logging.
@@ -222,7 +234,9 @@ ag-cam-tools capture -a 192.168.0.201 -i en0 -e png -o ./frames
 
 ### 2. Enable Jumbo Frames (MTU 9000)
 
-The default 1500-byte MTU causes packet drops on large frames. Set your Ethernet adapter to MTU 9000 in System Settings > Network > adapter > Details > Hardware.
+The tool auto-negotiates the largest GigE packet size supported by the link. With the default 1500-byte MTU, each 3.1 MB stereo frame requires ~2200 packets; enabling jumbo frames (MTU 9000) reduces this to ~380 packets, significantly improving throughput and reducing packet loss.
+
+Set your Ethernet adapter to MTU 9000 in System Settings > Network > adapter > Details > Hardware. The negotiated packet size is printed during startup. To override auto-negotiation, use `--packet-size <bytes>`.
 
 ### 3. Application Firewall
 
