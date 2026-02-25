@@ -9,10 +9,11 @@ bin/
 
 # Captured images
 images/
+calibration/calibration_*/
 
 # Vendor SDKs and documentation (local only)
-ArenaSDK_*/
-PDH016S_*_Documentation*/
+# ArenaSDK_*/
+# PDH016S_*_Documentation*/
 
 # Scratch images
 *.png

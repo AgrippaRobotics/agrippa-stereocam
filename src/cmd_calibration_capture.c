@@ -92,12 +92,41 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
                           double fps, double exposure_us, double gain_db,
                           gboolean auto_expose, int packet_size, int binning)
 {
+    /* Build a unique session folder: calibration_<datetime>_<md5_prefix>
+     * where the MD5 is derived from the capture parameters so identical
+     * settings produce the same hash prefix. */
+    char param_str[256];
+    snprintf (param_str, sizeof param_str,
+              "dev=%s fps=%.2f exp=%.1f gain=%.1f auto=%d pkt=%d bin=%d",
+              device_id, fps, exposure_us, gain_db,
+              (int) auto_expose, packet_size, binning);
+
+    char *full_md5 = g_compute_checksum_for_string (G_CHECKSUM_MD5,
+                                                     param_str, -1);
+    /* Use first 8 hex chars as a compact identifier. */
+    char md5_prefix[9];
+    memcpy (md5_prefix, full_md5, 8);
+    md5_prefix[8] = '\0';
+    g_free (full_md5);
+
+    GDateTime *now = g_date_time_new_now_local ();
+    char *dt_str = g_date_time_format (now, "%Y%m%d_%H%M%S");
+    g_date_time_unref (now);
+
+    char session_name[128];
+    snprintf (session_name, sizeof session_name,
+              "calibration_%s_%s", dt_str, md5_prefix);
+    g_free (dt_str);
+
+    char *session_dir = g_build_filename (output_dir, session_name, NULL);
+
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
     if (!camera) {
         fprintf (stderr, "error: %s\n",
                  error ? error->message : "failed to open device");
         g_clear_error (&error);
+        g_free (session_dir);
         arv_shutdown ();
         return EXIT_FAILURE;
     }
@@ -108,6 +137,7 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
     if (camera_configure (camera, AG_MODE_CONTINUOUS,
                           binning, exposure_us, gain_db, auto_expose,
                           packet_size, iface_ip, FALSE, &cfg) != EXIT_SUCCESS) {
+        g_free (session_dir);
         g_object_unref (camera);
         arv_shutdown ();
         return EXIT_FAILURE;
@@ -123,12 +153,13 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
     guint display_w  = proc_sub_w * 2;
     guint display_h  = proc_h;
 
-    /* Create output directories. */
-    char *left_dir  = g_build_filename (output_dir, "stereoLeft",  NULL);
-    char *right_dir = g_build_filename (output_dir, "stereoRight", NULL);
+    /* Create output directories under the session folder. */
+    char *left_dir  = g_build_filename (session_dir, "stereoLeft",  NULL);
+    char *right_dir = g_build_filename (session_dir, "stereoRight", NULL);
     if (g_mkdir_with_parents (left_dir,  0755) != 0 ||
         g_mkdir_with_parents (right_dir, 0755) != 0) {
         fprintf (stderr, "error: cannot create output directories\n");
+        g_free (session_dir);
         g_free (left_dir);
         g_free (right_dir);
         g_object_unref (cfg.stream);
@@ -140,6 +171,7 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
     /* SDL2 setup (video + audio for capture beep). */
     if (SDL_Init (SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         fprintf (stderr, "error: SDL_Init: %s\n", SDL_GetError ());
+        g_free (session_dir);
         g_free (left_dir);
         g_free (right_dir);
         g_object_unref (cfg.stream);
@@ -160,6 +192,7 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
     if (!window) {
         fprintf (stderr, "error: SDL_CreateWindow: %s\n", SDL_GetError ());
         SDL_Quit ();
+        g_free (session_dir);
         g_free (left_dir);
         g_free (right_dir);
         g_object_unref (cfg.stream);
@@ -176,6 +209,7 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
         fprintf (stderr, "error: SDL_CreateRenderer: %s\n", SDL_GetError ());
         SDL_DestroyWindow (window);
         SDL_Quit ();
+        g_free (session_dir);
         g_free (left_dir);
         g_free (right_dir);
         g_object_unref (cfg.stream);
@@ -192,6 +226,7 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
         SDL_DestroyRenderer (renderer);
         SDL_DestroyWindow (window);
         SDL_Quit ();
+        g_free (session_dir);
         g_free (left_dir);
         g_free (right_dir);
         g_object_unref (cfg.stream);
@@ -215,7 +250,8 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
     printf ("Starting acquisition at %.1f Hz...\n", fps);
     printf ("Resolution: %u×%u per eye (binning=%d)\n", proc_sub_w, proc_h,
             binning);
-    printf ("Output: %s/ and %s/\n", left_dir, right_dir);
+    printf ("Session: %s\n", session_dir);
+    printf ("Output:  %s/ and %s/\n", left_dir, right_dir);
     printf ("Press 's' to save a pair, 'q' to quit.\n");
     printf ("Target: %d image pairs\n\n", target_count);
 
@@ -396,7 +432,7 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
 
     printf ("\nStopping...\n");
     arv_camera_stop_acquisition (camera, NULL);
-    printf ("Captured %d image pairs.\n", saved_count);
+    printf ("Captured %d image pairs in %s\n", saved_count, session_dir);
 
     if (saved_count > 0)
         printf ("Open 2.Calibration.ipynb to continue.\n");
@@ -408,6 +444,7 @@ cleanup:
     g_free (bayer_right);
     g_free (rgb_left);
     g_free (rgb_right);
+    g_free (session_dir);
     g_free (left_dir);
     g_free (right_dir);
     audio_cleanup ();
@@ -434,7 +471,7 @@ cmd_calibration_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
     struct arg_str *interface = arg_str0 ("i", "interface",  "<iface>",
                                           "force NIC selection");
     struct arg_str *output    = arg_str0 ("o", "output",     "<dir>",
-                                          "base output directory (default: .)");
+                                          "base output directory (default: ./calibration)");
     struct arg_int *count     = arg_int0 ("n", "count",      "<N>",
                                           "target number of pairs (default: 30)");
     struct arg_dbl *fps_a     = arg_dbl0 ("f", "fps",       "<rate>",
@@ -463,7 +500,7 @@ cmd_calibration_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
     }
 
     /* Defaults. */
-    output->sval[0]    = ".";
+    output->sval[0]    = "./calibration";
     count->ival[0]     = 30;
     fps_a->dval[0]     = 10.0;
     binning_a->ival[0] = 1;

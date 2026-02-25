@@ -125,12 +125,14 @@ Press `q` or `Esc` to quit.
 
 ### `calibration-capture`
 
-Interactive capture session for building a stereo calibration image set. Shows a live side-by-side preview and saves left/right PNG pairs into `stereoLeft/` and `stereoRight/` on keypress, matching the layout expected by `2.Calibration.ipynb`.
+Interactive capture session for building a stereo calibration image set. Shows a live side-by-side preview and saves left/right PNG pairs on keypress, matching the layout expected by `2.Calibration.ipynb`.
+
+Each session creates a unique folder under the output directory: `calibration_<datetime>_<md5>`, where `<datetime>` is a compact timestamp and `<md5>` is an 8-character hash of the capture parameters. Images are saved into `stereoLeft/` and `stereoRight/` within that session folder.
 
 ```bash
 ag-cam-tools calibration-capture -a 192.168.0.201 -A           # auto-expose, 30 pairs target
 ag-cam-tools calibration-capture -a 192.168.0.201 -A -n 40     # 40 pairs target
-ag-cam-tools calibration-capture -a 192.168.0.201 -x 30000 -g 6 -o ./calib_session
+ag-cam-tools calibration-capture -a 192.168.0.201 -x 30000 -g 6 -o ./my_calib
 ag-cam-tools calibration-capture -a 192.168.0.201 -A -b 2      # use 2:1 binning (720×540)
 ```
 
@@ -139,7 +141,7 @@ ag-cam-tools calibration-capture -a 192.168.0.201 -A -b 2      # use 2:1 binning
 | `-s`, `--serial` | Match camera by serial number |
 | `-a`, `--address` | Connect by camera IP address |
 | `-i`, `--interface` | Force NIC selection |
-| `-o`, `--output` | Base output directory (default: current) |
+| `-o`, `--output` | Base output directory (default: `./calibration`) |
 | `-n`, `--count` | Target number of pairs (default: 30) |
 | `-f`, `--fps` | Preview rate in Hz (default: 10) |
 | `-x`, `--exposure` | Exposure time in microseconds |
@@ -148,7 +150,7 @@ ag-cam-tools calibration-capture -a 192.168.0.201 -A -b 2      # use 2:1 binning
 | `-b`, `--binning` | Sensor binning factor: `1` (default) or `2` |
 | `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
 
-Press `s` to save the current pair, `q` or `Esc` to quit. The window title shows the running count. Images are saved as `imageL{N}.png` / `imageR{N}.png` (0-indexed).
+Press `s` to save the current pair, `q` or `Esc` to quit. The window title shows the running count. Images are saved as `imageL{N}.png` / `imageR{N}.png` (0-indexed) within the session folder.
 
 ### Shell completions
 
