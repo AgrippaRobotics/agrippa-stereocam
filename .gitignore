@@ -10,6 +10,10 @@ bin/
 # Captured images
 images/
 calibration/calibration_*/
+calibration/calib_result/
+
+# Python virtualenv
+calibration/.venv/
 
 # Vendor SDKs and documentation (local only)
 # ArenaSDK_*/
