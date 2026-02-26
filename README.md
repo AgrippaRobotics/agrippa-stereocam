@@ -9,6 +9,13 @@ AprilTag detection in `stream` uses apriltag3 via:
 - system install (`pkg-config apriltag`) if available, or
 - vendored submodule fallback at `vendor/apriltag`.
 
+OpenCV StereoSGBM backend for `depth-preview` uses OpenCV 4 via:
+- system install (`pkg-config opencv4`) — optional, enables `--stereo-backend sgbm`.
+
+ONNX Runtime backend for `depth-preview` uses ONNX Runtime via:
+- system install (`pkg-config libonnxruntime`) — optional, enables `--stereo-backend onnx`.
+- or set `ONNXRUNTIME_HOME=/path/to/onnxruntime` for manual installs (e.g. Jetson).
+
 ```bash
 git submodule update --init --recursive
 make                # builds bin/ag-cam-tools
@@ -31,6 +38,7 @@ ag-cam-tools <command> [options]
 | `stream` | Real-time stereo preview via SDL2 |
 | `focus` | Real-time focus scoring for lens adjustment |
 | `calibration-capture` | Interactive stereo pair capture for calibration |
+| `depth-preview` | Live depth map with selectable stereo backend |
 
 ### `list`
 
@@ -155,6 +163,47 @@ ag-cam-tools calibration-capture -a 192.168.0.201 -A -b 2      # use 2:1 binning
 | `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
 
 Press `s` to save the current pair, `q` or `Esc` to quit. The window title shows the running count. Images are saved as `imageL{N}.png` / `imageR{N}.png` (0-indexed) within the session folder.
+
+### `depth-preview`
+
+Live stereo depth preview with selectable disparity backend. Displays the rectified left eye alongside a JET-coloured disparity map. Requires a completed calibration session (rectification maps).
+
+```bash
+ag-cam-tools depth-preview -a 192.168.0.201 -A -r calibration/calibration_20260225_143015_a1b2c3d4
+ag-cam-tools depth-preview -a 192.168.0.201 -A -r <session> --stereo-backend sgbm --block-size 7
+ag-cam-tools depth-preview -a 192.168.0.201 -A -r <session> --stereo-backend onnx --model-path model.onnx
+```
+
+| Option | Description |
+|--------|-------------|
+| `-s`, `--serial` | Match camera by serial number |
+| `-a`, `--address` | Connect by camera IP address |
+| `-i`, `--interface` | Force NIC selection |
+| `-f`, `--fps` | Trigger rate in Hz (default: 10) |
+| `-x`, `--exposure` | Exposure time in microseconds |
+| `-g`, `--gain` | Sensor gain in dB (0-48; 0-24 analog, 24-48 digital) |
+| `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
+| `-b`, `--binning` | Sensor binning factor: `1` (default) or `2` |
+| `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
+| `-r`, `--rectify` | **Required.** Calibration session folder (loads `calib_result/remap_*.bin`) |
+| `--stereo-backend` | Backend: `sgbm` (default), `onnx` (also accepts `igev`, `foundation` as aliases) |
+| `--model-path` | Path to ONNX model file (required for `onnx` backend) |
+| `--min-disparity` | Override calibration metadata min_disparity |
+| `--num-disparities` | Override calibration metadata num_disparities |
+| `--block-size` | SGBM block size (default: 5) |
+
+Press `q` or `Esc` to quit. Click on the disparity panel to print the disparity value at that pixel.
+
+#### Stereo backends
+
+| Backend | Engine | Build requirement |
+|---------|--------|-------------------|
+| `sgbm` | OpenCV StereoSGBM (in-process) | `pkg-config opencv4` |
+| `onnx` | ONNX Runtime (in-process) | `pkg-config libonnxruntime` or `ONNXRUNTIME_HOME` |
+
+The `onnx` backend runs any ONNX stereo model in-process via the ONNX Runtime C API. It automatically selects the best execution provider: CUDA > CoreML (macOS) > CPU. The CLI also accepts `igev` and `foundation` as aliases for `onnx`.
+
+Export notebooks for converting PyTorch models to ONNX live in `backends/` — see [backends/IGEV_SETUP.md](backends/IGEV_SETUP.md) for the full setup guide.
 
 ### Shell completions
 

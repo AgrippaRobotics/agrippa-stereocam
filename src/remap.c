@@ -175,3 +175,59 @@ ag_remap_rgb (const AgRemapTable *table, const guint8 *src, guint8 *dst)
     remap_rgb_scalar (table->offsets, n, src, dst);
 #endif
 }
+
+/* ------------------------------------------------------------------ */
+/*  Grayscale (single-channel) remap                                   */
+/* ------------------------------------------------------------------ */
+
+static void
+remap_gray_scalar (const uint32_t *offsets, uint32_t n_pixels,
+                   const guint8 *src, guint8 *dst)
+{
+    for (uint32_t i = 0; i < n_pixels; i++) {
+        uint32_t off = offsets[i];
+        dst[i] = (off != AG_REMAP_SENTINEL) ? src[off] : 0;
+    }
+}
+
+#ifdef __aarch64__
+
+static void
+remap_gray_neon (const uint32_t *offsets, uint32_t n_pixels,
+                 const guint8 *src, guint8 *dst)
+{
+    uint32_t i = 0;
+
+    /* Process 8 pixels per iteration. */
+    for (; i + 8 <= n_pixels; i += 8) {
+        uint32x4_t off_lo = vld1q_u32 (offsets + i);
+        uint32x4_t off_hi = vld1q_u32 (offsets + i + 4);
+
+        uint32_t o[8];
+        vst1q_u32 (o,     off_lo);
+        vst1q_u32 (o + 4, off_hi);
+
+        uint8_t tmp[8];
+        for (int k = 0; k < 8; k++)
+            tmp[k] = (o[k] != AG_REMAP_SENTINEL) ? src[o[k]] : 0;
+
+        vst1_u8 (dst + i, vld1_u8 (tmp));
+    }
+
+    /* Scalar tail. */
+    if (i < n_pixels)
+        remap_gray_scalar (offsets + i, n_pixels - i, src, dst + i);
+}
+
+#endif /* __aarch64__ */
+
+void
+ag_remap_gray (const AgRemapTable *table, const guint8 *src, guint8 *dst)
+{
+    uint32_t n = table->width * table->height;
+#ifdef __aarch64__
+    remap_gray_neon (table->offsets, n, src, dst);
+#else
+    remap_gray_scalar (table->offsets, n, src, dst);
+#endif
+}

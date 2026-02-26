@@ -1,4 +1,5 @@
 CC      = gcc
+CXX     ?= g++
 CFLAGS  = -Wall -Wextra -O2 \
           $(shell pkg-config --cflags aravis-0.8) \
           $(shell pkg-config --cflags sdl2)
@@ -22,12 +23,18 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/cmd_stream.c \
        $(SRCDIR)/cmd_focus.c \
        $(SRCDIR)/cmd_calibration_capture.c \
-       $(SRCDIR)/remap.c
+       $(SRCDIR)/remap.c \
+       $(SRCDIR)/stereo_common.c \
+       $(SRCDIR)/cmd_depth_preview.c
 
-VENDOR_SRCS = $(VENDORDIR)/argtable3.c
+VENDOR_SRCS = $(VENDORDIR)/argtable3.c \
+              $(VENDORDIR)/cJSON.c
+
+CXX_SRCS =
 
 OBJS        = $(patsubst $(SRCDIR)/%.c,$(BINDIR)/%.o,$(SRCS))
 VENDOR_OBJS = $(patsubst $(VENDORDIR)/%.c,$(BINDIR)/%.o,$(VENDOR_SRCS))
+CXX_OBJS    = $(patsubst $(SRCDIR)/%.cpp,$(BINDIR)/%.o,$(CXX_SRCS))
 
 # --- AprilTag: prefer system install, fall back to vendor submodule ---
 APRILTAG_SYSTEM_CFLAGS := $(shell pkg-config --cflags apriltag 2>/dev/null)
@@ -52,6 +59,36 @@ else ifneq ($(wildcard $(VENDORDIR)/apriltag/apriltag.h),)
   APRILTAG_OBJS = $(patsubst $(APRILTAG_DIR)/%.c,$(BINDIR)/apriltag/%.o,$(APRILTAG_SRCS))
 endif
 
+# --- OpenCV: optional, provides StereoSGBM backend ---
+OPENCV_CFLAGS := $(shell pkg-config --cflags opencv4 2>/dev/null)
+OPENCV_LIBS   := $(shell pkg-config --libs   opencv4 2>/dev/null)
+
+ifneq ($(OPENCV_LIBS),)
+  CFLAGS   += $(OPENCV_CFLAGS) -DHAVE_OPENCV=1
+  LIBS     += $(OPENCV_LIBS)
+  CXX_SRCS += $(SRCDIR)/stereo_sgbm.cpp
+  CXX_OBJS  = $(patsubst $(SRCDIR)/%.cpp,$(BINDIR)/%.o,$(CXX_SRCS))
+  # C++ standard library required when linking a mixed C/C++ binary
+  LIBS     += -lstdc++
+endif
+
+# --- ONNX Runtime: optional, provides in-process neural stereo backend ---
+ONNXRT_CFLAGS := $(shell pkg-config --cflags libonnxruntime 2>/dev/null || \
+                          pkg-config --cflags onnxruntime 2>/dev/null)
+ONNXRT_LIBS   := $(shell pkg-config --libs   libonnxruntime 2>/dev/null || \
+                          pkg-config --libs   onnxruntime 2>/dev/null)
+
+ifdef ONNXRUNTIME_HOME
+  ONNXRT_CFLAGS := -I$(ONNXRUNTIME_HOME)/include
+  ONNXRT_LIBS   := -L$(ONNXRUNTIME_HOME)/lib -lonnxruntime
+endif
+
+ifneq ($(ONNXRT_LIBS),)
+  CFLAGS += $(ONNXRT_CFLAGS) -DHAVE_ONNXRUNTIME=1
+  LIBS   += $(ONNXRT_LIBS)
+  SRCS   += $(SRCDIR)/stereo_onnx.c
+endif
+
 PREFIX     ?= /usr/local
 BASHCOMPDIR ?= $(PREFIX)/share/bash-completion/completions
 ZSHCOMPDIR  ?= $(PREFIX)/share/zsh/site-functions
@@ -66,7 +103,14 @@ $(BINDIR):
 $(BINDIR)/%.o: $(SRCDIR)/%.c | $(BINDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# C++ compilation rule (stereo_sgbm.cpp)
+$(BINDIR)/%.o: $(SRCDIR)/%.cpp | $(BINDIR)
+	$(CXX) $(CFLAGS) -std=c++11 -c -o $@ $<
+
 $(BINDIR)/argtable3.o: $(VENDORDIR)/argtable3.c | $(BINDIR)
+	$(CC) -Wall -O2 -c -o $@ $<
+
+$(BINDIR)/cJSON.o: $(VENDORDIR)/cJSON.c | $(BINDIR)
 	$(CC) -Wall -O2 -c -o $@ $<
 
 # AprilTag vendor object compilation
@@ -78,8 +122,8 @@ $(BINDIR)/apriltag/%.o: $(APRILTAG_DIR)/%.c | $(BINDIR)
 $(APRILTAG_LIB): $(APRILTAG_OBJS)
 	$(AR) rcs $@ $^
 
-$(TARGET): $(OBJS) $(VENDOR_OBJS) $(APRILTAG_LIB)
-	$(CC) -o $@ $(OBJS) $(VENDOR_OBJS) $(if $(APRILTAG_LIB),-L$(BINDIR) -lapriltag) $(LIBS)
+$(TARGET): $(OBJS) $(VENDOR_OBJS) $(CXX_OBJS) $(APRILTAG_LIB)
+	$(CC) -o $@ $(OBJS) $(VENDOR_OBJS) $(CXX_OBJS) $(if $(APRILTAG_LIB),-L$(BINDIR) -lapriltag) $(LIBS)
 	codesign --force --sign - $@ 2>/dev/null || true
 
 install: $(TARGET)

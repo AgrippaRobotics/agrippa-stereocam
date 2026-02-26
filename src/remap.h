@@ -34,4 +34,13 @@ void          ag_remap_table_free (AgRemapTable *table);
 void ag_remap_rgb (const AgRemapTable *table,
                    const guint8 *src, guint8 *dst);
 
+/*
+ * Apply nearest-neighbour remap on single-channel (grayscale) data.
+ * src and dst must each be width*height bytes.  dst must not alias src.
+ * Uses NEON on aarch64, scalar fallback otherwise.
+ * The same offset table is used — offsets are pixel indices, not byte offsets.
+ */
+void ag_remap_gray (const AgRemapTable *table,
+                    const guint8 *src, guint8 *dst);
+
 #endif /* AG_REMAP_H */
