@@ -253,7 +253,7 @@ ag_onnx_create (uint32_t width, uint32_t height, const AgOnnxParams *params)
      * CoreML, etc.) without requiring EP-specific symbols at link time.
      * Each call fails gracefully if the EP isn't compiled into the runtime.
      *
-     * Probe order: CUDA > CoreML > CPU (always available).
+     * Probe order: CUDA > CoreML (macOS) > CPU.
      */
     {
         const char *cuda_keys[]   = { "device_id", NULL };
@@ -264,13 +264,17 @@ ag_onnx_create (uint32_t width, uint32_t height, const AgOnnxParams *params)
             printf ("ONNX: using CUDA execution provider\n");
         } else {
             api->ReleaseStatus (s);
-            const char *empty_keys[]   = { NULL };
-            const char *empty_values[] = { NULL };
+            const char *coreml_keys[]   = { "MLComputeUnits",
+                                              "RequireStaticInputShapes",
+                                              NULL };
+            const char *coreml_values[] = { "ALL", "1", NULL };
             s = api->SessionOptionsAppendExecutionProvider (
-                h->opts, "CoreML", empty_keys, empty_values, 0);
+                h->opts, "CoreML", coreml_keys, coreml_values, 2);
             if (s == NULL) {
                 printf ("ONNX: using CoreML execution provider\n");
             } else {
+                printf ("ONNX: CoreML unavailable: %s\n",
+                        api->GetErrorMessage (s));
                 api->ReleaseStatus (s);
                 printf ("ONNX: using CPU execution provider\n");
             }

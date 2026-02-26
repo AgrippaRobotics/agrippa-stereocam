@@ -80,7 +80,7 @@ ONNXRT_LIBS   := $(shell pkg-config --libs   libonnxruntime 2>/dev/null || \
 
 ifdef ONNXRUNTIME_HOME
   ONNXRT_CFLAGS := -I$(ONNXRUNTIME_HOME)/include
-  ONNXRT_LIBS   := -L$(ONNXRUNTIME_HOME)/lib -lonnxruntime
+  ONNXRT_LIBS   := -L$(ONNXRUNTIME_HOME)/lib -Wl,-rpath,$(ONNXRUNTIME_HOME)/lib -lonnxruntime
 endif
 
 ifneq ($(ONNXRT_LIBS),)

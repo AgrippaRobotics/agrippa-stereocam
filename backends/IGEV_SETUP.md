@@ -167,6 +167,7 @@ The ONNX backend expects a stereo model with at least two inputs (left and right
 | File | Purpose |
 |------|---------|
 | `backends/1.Export_IGEV.ipynb` | Interactive IGEV++ to ONNX export notebook |
+| `backends/1b.Export_RT-IGEV.ipynb` | Interactive RT-IGEV++ (real-time) to ONNX export notebook |
 | `backends/2.Export_FoundationStereo.ipynb` | Interactive FoundationStereo to ONNX export notebook |
 | `backends/requirements-onnx-export.txt` | Export-time Python deps (torch, timm, onnx, etc.) |
 | `src/stereo_onnx.c` | In-process ONNX Runtime C backend (built when `HAVE_ONNXRUNTIME=1`) |

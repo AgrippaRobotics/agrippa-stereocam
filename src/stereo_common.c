@@ -22,14 +22,27 @@ ag_stereo_parse_backend (const char *name, AgStereoBackend *out)
         *out = AG_STEREO_SGBM;
         return 0;
     }
-    /* "onnx" is the canonical name; "igev" and "foundation" are aliases. */
+    /* "onnx" is the canonical name; model-specific names are aliases. */
     if (strcmp (name, "onnx") == 0 ||
         strcmp (name, "igev") == 0 ||
+        strcmp (name, "rt-igev") == 0 ||
         strcmp (name, "foundation") == 0) {
         *out = AG_STEREO_ONNX;
         return 0;
     }
     return -1;
+}
+
+const char *
+ag_stereo_default_model_path (const char *name)
+{
+    if (strcmp (name, "igev") == 0)
+        return "models/igev_plusplus.onnx";
+    if (strcmp (name, "rt-igev") == 0)
+        return "models/rt_igev_plusplus.onnx";
+    if (strcmp (name, "foundation") == 0)
+        return "models/foundation_stereo.onnx";
+    return NULL;
 }
 
 const char *

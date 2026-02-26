@@ -487,9 +487,9 @@ cmd_depth_preview (int argc, char *argv[], arg_dstr_t res, void *ctx)
     struct arg_str *rectify   = arg_str1 ("r", "rectify", "<session>",
                                           "calibration session folder (required)");
     struct arg_str *backend_a = arg_str0 (NULL, "stereo-backend", "<name>",
-                                          "sgbm (default), onnx (also: igev, foundation)");
+                                          "sgbm (default), onnx, igev, rt-igev, foundation");
     struct arg_str *model_path_a = arg_str0 (NULL, "model-path", "<path>",
-                                              "ONNX model file (required for onnx backend)");
+                                              "ONNX model file (auto for named backends)");
     struct arg_int *min_disp_a = arg_int0 (NULL, "min-disparity", "<int>",
                                             "override calibration min_disparity");
     struct arg_int *num_disp_a = arg_int0 (NULL, "num-disparities", "<int>",
@@ -573,7 +573,7 @@ cmd_depth_preview (int argc, char *argv[], arg_dstr_t res, void *ctx)
     if (backend_a->count) {
         if (ag_stereo_parse_backend (backend_a->sval[0], &backend) != 0) {
             arg_dstr_catf (res, "error: unknown --stereo-backend '%s' "
-                           "(options: sgbm, onnx, igev, foundation)\n",
+                           "(options: sgbm, onnx, igev, rt-igev, foundation)\n",
                            backend_a->sval[0]);
             exitcode = EXIT_FAILURE;
             goto done;
@@ -606,13 +606,20 @@ cmd_depth_preview (int argc, char *argv[], arg_dstr_t res, void *ctx)
             sgbm_params.min_disparity, sgbm_params.num_disparities);
 
     /* Build ONNX params (for neural backends). */
+    const char *model_path = model_path_a->count ? model_path_a->sval[0] : NULL;
+
+    /* If no explicit --model-path, use the default for named aliases. */
+    if (!model_path && backend_a->count)
+        model_path = ag_stereo_default_model_path (backend_a->sval[0]);
+
     AgOnnxParams onnx_params = {
-        .model_path = model_path_a->count ? model_path_a->sval[0] : NULL,
+        .model_path = model_path,
     };
 
     /* Validate ONNX backend requirements. */
     if (backend == AG_STEREO_ONNX && !onnx_params.model_path) {
-        arg_dstr_catf (res, "error: --model-path is required for the onnx backend\n");
+        arg_dstr_catf (res, "error: --model-path is required for the onnx backend "
+                       "(or use a named backend: igev, rt-igev, foundation)\n");
         exitcode = EXIT_FAILURE;
         goto done;
     }

@@ -23,11 +23,19 @@ typedef enum {
 
 /*
  * Parse a backend name string into the enum value.
- * Accepts: "sgbm", "onnx", "igev", "foundation".
- * "igev" and "foundation" are aliases for AG_STEREO_ONNX.
+ * Accepts: "sgbm", "onnx", "igev", "rt-igev", "foundation".
+ * "igev", "rt-igev", and "foundation" are aliases for AG_STEREO_ONNX.
  * Returns 0 on success, -1 on unrecognised name.
  */
 int ag_stereo_parse_backend (const char *name, AgStereoBackend *out);
+
+/*
+ * Return the default model path for a named ONNX alias, or NULL.
+ *   "igev"       → "models/igev_plusplus.onnx"
+ *   "rt-igev"    → "models/rt_igev_plusplus.onnx"
+ *   "foundation" → "models/foundation_stereo.onnx"
+ */
+const char *ag_stereo_default_model_path (const char *name);
 
 /* Return human-readable name for the backend enum value. */
 const char *ag_stereo_backend_name (AgStereoBackend backend);
