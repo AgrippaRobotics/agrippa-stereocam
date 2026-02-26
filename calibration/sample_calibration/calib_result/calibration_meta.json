@@ -1,0 +1,52 @@
+{
+  "image_size": [
+    1440,
+    1080
+  ],
+  "num_pairs_used": 20,
+  "checkerboard": {
+    "rows": 17,
+    "columns": 24,
+    "square_size_cm": 0.75
+  },
+  "distortion_model": "rational_8",
+  "rms_stereo_px": 0.3988,
+  "rms_left_px": 0.1135,
+  "rms_right_px": 0.1734,
+  "per_pair_rms_px": [
+    0.5886,
+    0.6566,
+    0.3111,
+    0.9037,
+    0.6762,
+    0.7663,
+    0.5618,
+    0.8316,
+    0.401,
+    0.3404,
+    0.2293,
+    0.3171,
+    0.2674,
+    0.3785,
+    0.2344,
+    0.6324,
+    0.3547,
+    0.3757,
+    0.7089,
+    0.582
+  ],
+  "mean_epipolar_error_px": 0.4466,
+  "max_epipolar_error_px": 7.1233,
+  "baseline_cm": 4.0677,
+  "focal_length_px": 875.24,
+  "principal_point_px": [
+    766.76,
+    580.04
+  ],
+  "disparity_range": {
+    "z_near_cm": 30,
+    "z_far_cm": 200,
+    "min_disparity": 17,
+    "num_disparities": 128
+  }
+}
