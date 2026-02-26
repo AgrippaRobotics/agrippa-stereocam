@@ -167,6 +167,45 @@ source completions/ag-cam-tools.bash   # bash
 source completions/ag-cam-tools.zsh    # zsh
 ```
 
+## Calibration Notebooks
+
+Offline stereo calibration runs in Jupyter notebooks under `calibration/`.
+See [bringup_guide.md](bringup_guide.md) for the full bring-up workflow.
+
+| Notebook | Description |
+|----------|-------------|
+| `1.Acquiring_Calibration_Images.ipynb` | Live capture via Aravis (alternative to `calibration-capture`) |
+| `2.Calibration.ipynb` | Corner detection, stereo calibration, rectification map export |
+| `3.Depthmap_with_Tuning_Bar.ipynb` | Live depth map with interactive StereoBM tuning |
+
+### Setup
+
+```bash
+cd calibration
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m ipykernel install --user --name agrippa-calibration
+```
+
+### Calibration workflow (`2.Calibration.ipynb`)
+
+1. **Corner detection** — finds checkerboard corners in all stereo pairs with subpixel refinement
+2. **Per-camera intrinsic calibration** — runs `calibrateCamera` independently on each camera to seed the stereo solver and flag per-camera issues
+3. **Stereo calibration** — joint `stereoCalibrate` with intrinsic guess, rational 8-coefficient distortion model
+4. **Per-pair reprojection error analysis** — identifies outlier pairs (bar chart + table); a separate cell removes them so you can re-run calibration
+5. **Stereo rectification + export** — `stereoRectify`, undistortion/rectification maps, all `.npy` artifacts
+6. **Epipolar error validation** — measures rectified y-difference across all corner pairs (must be < 0.5 px for reliable disparity)
+7. **C-ready remap export** — pre-computed `remap_left.bin` / `remap_right.bin` for `ag-cam-tools stream --rectify`
+8. **Disparity range estimation** — computes recommended `numDisparities`/`minDisparity` from baseline, focal length, and working distance
+9. **Metadata export** — writes `calibration_meta.json` with RMS errors, baseline, focal length, disparity range, and all key parameters
+
+### Output (`calib_result/`)
+
+Calibration results are saved per-session in `<session>/calib_result/`:
+- `.npy` files — camera matrices, distortion coefficients, R, T, rectification maps, Q matrix
+- `.bin` files — pre-computed pixel-offset remap tables for the C runtime
+- `calibration_meta.json` — machine-readable summary of all calibration parameters and quality metrics
+
 ## Citation and Attribution
 
 This project is licensed under Apache-2.0 and includes a [NOTICE](NOTICE) file for attribution notices that should be preserved in redistributions and derivative works.
