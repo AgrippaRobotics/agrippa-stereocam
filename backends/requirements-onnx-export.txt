@@ -1,0 +1,15 @@
+# Export-time dependencies for IGEV++ ONNX conversion.
+# Not needed on the target machine — only onnxruntime + numpy are
+# required at inference time (see requirements-onnx.txt).
+#
+# Usage:
+#   pip install -r backends/requirements-onnx-export.txt
+#   python3 backends/export_igev_onnx.py --help
+
+torch>=1.12
+timm==0.5.4
+onnx>=1.14
+onnxsim>=0.4
+onnxruntime>=1.16
+numpy>=1.24
+Pillow>=9.0

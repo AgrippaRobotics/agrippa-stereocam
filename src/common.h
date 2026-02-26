@@ -76,6 +76,10 @@ void apply_lut_inplace (guint8 *data, size_t n, const guint8 lut[256]);
 void debayer_rg8_to_rgb (const guint8 *bayer, guint8 *rgb,
                          guint width, guint height);
 
+/* --- RGB → Grayscale (BT.601 luminance) --- */
+
+void rgb_to_gray (const guint8 *rgb, guint8 *gray, uint32_t n_pixels);
+
 /* --- DualBayer helpers --- */
 
 void deinterleave_dual_bayer (const guint8 *interleaved, guint width,

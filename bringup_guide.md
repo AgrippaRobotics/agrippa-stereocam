@@ -187,7 +187,7 @@ The OpenCV stereo calibration workflow proceeds as follows:
 
 - `cv::findChessboardCorners`
 - `cv::cornerSubPix` refinement
-- Validate reprojection residuals
+- Pairs where the board is not fully visible in both frames are discarded
 
 Corner detection happens independently per camera.
 
@@ -195,51 +195,60 @@ Corner detection happens independently per camera.
 
 #### Step 2 — Calibrate Each Camera Intrinsics
 
-- `cv::calibrateCamera`
-- Estimate:
-  - fx, fy
-  - cx, cy
-  - distortion coefficients
+- `cv::calibrateCamera` run independently on left and right
+- Estimate per-camera: fx, fy, cx, cy, distortion coefficients
+- Report per-camera RMS reprojection error
+- Flag large RMS divergence between cameras (focus mismatch, bad lens)
 
-This produces per-camera intrinsic models.
+This produces per-camera intrinsic models used as the initial guess for
+Step 3.
 
 ---
 
 #### Step 3 — Stereo Calibration
 
-- `cv::stereoCalibrate`
-- Solve for:
-  - Rotation (R)
-  - Translation (T)
-  - Essential and Fundamental matrices
-
-This defines stereo geometry.
+- `cv::stereoCalibrate` with `CALIB_USE_INTRINSIC_GUESS`
+- Per-camera intrinsics from Step 2 seed the joint solver
+- Solve for: Rotation (R), Translation (T), Essential and Fundamental matrices
 
 ---
 
-#### Step 4 — Stereo Rectification
+#### Step 4 — Per-Pair Error Analysis & Outlier Rejection
+
+- Re-derive per-image poses via `cv::solvePnP` + `cv::projectPoints`
+- Compute per-pair RMS for both cameras
+- Flag outlier pairs (> 2× median RMS)
+- Remove outliers and re-run Steps 2–3 if needed
+
+---
+
+#### Step 5 — Stereo Rectification
 
 - `cv::stereoRectify`
-- Compute rectification transforms
-- Generate undistort/rectify maps
+- Compute rectification transforms (R1, R2, P1, P2, Q)
+- `cv::initUndistortRectifyMap` for both cameras
+- Determine valid stereo ROI
 
 ---
 
-#### Step 5 — Determine Valid Stereo ROI
+#### Step 6 — Epipolar Error Validation
 
-- Extract valid overlapping region
-- Store as runtime ROI mask
+- Undistort and rectify all detected corner pairs
+- Measure absolute y-difference between corresponding left/right points
+- Mean epipolar error must be < 0.5 px for reliable disparity
+- If > 1.0 px, re-capture calibration images
 
 ---
 
-#### Step 6 — Export Artifacts
+#### Step 7 — Export Artifacts
 
-Export:
-- Intrinsic matrices
-- Distortion coefficients
-- R, T
-- Rectification maps
+Export to `calib_result/`:
+- Intrinsic matrices and distortion coefficients
+- R, T, E, F
+- Rectification maps (`.npy` for Python, `.bin` for C runtime)
 - Valid ROI bounds
+- Q matrix (disparity-to-depth)
+- `calibration_meta.json` with all key parameters and quality metrics
 
 Runtime system does not depend on OpenCV.
 
@@ -271,16 +280,17 @@ subgraph RIGHT_PIPELINE [Right Camera Pipeline]
     D2 --> E2[Calibrate Right Intrinsics]
 end
 
-E1 --> F[Stereo Calibration<br/>Solve R and T]
+E1 --> F[Stereo Calibration<br/>with Intrinsic Guess]
 E2 --> F
 
-F --> G[Stereo Rectification]
+F --> G[Per-Pair Error Analysis]
+G -->|outliers found| E1
+G -->|outliers found| E2
+G -->|clean| H[Stereo Rectification]
 
-G --> H[Compute Valid Stereo ROI]
-
-G --> I[Generate Rectification Maps]
-
-I --> J[Export Calibration Artifacts]
+H --> I[Epipolar Error Validation]
+I -->|pass| J[Export Calibration Artifacts<br/>.npy + .bin + metadata JSON]
+I -->|fail| A
 ```
 
 ---
@@ -290,24 +300,39 @@ I --> J[Export Calibration Artifacts]
 <!-- SECTION: Calibration Validation -->
 <!-- OBJECTIVE: Confirm calibration accuracy before deployment -->
 
-### Validation Metrics
+`2.Calibration.ipynb` provides quantitative validation at three levels:
 
-- Reprojection error (target < 0.3–0.5 px typical)
-- Visual straightness of rectified lines
-- Epipolar alignment check
-- Depth sanity check on known geometry
+### Automated Checks (in notebook)
+
+| Metric | Target | Notebook cell |
+|--------|--------|---------------|
+| Per-camera RMS reprojection error | < 0.5 px | Per-camera intrinsic calibration |
+| Stereo RMS reprojection error | < 0.5 px | Stereo calibration |
+| Per-pair RMS (outlier detection) | < 2× median | Per-pair reprojection error analysis |
+| Mean epipolar error (y-difference) | < 0.5 px | Rectification quality |
+
+### Visual Checks (in notebook)
+
+- Rectified stereo pair with horizontal scanlines overlay
+- Per-pair reprojection error bar chart
+
+### Post-Calibration Checks (manual)
+
+- Depth sanity check on known geometry (use `3.Depthmap_with_Tuning_Bar.ipynb`)
+- Disparity range estimation provides expected `numDisparities`/`minDisparity` for your working distance
 
 ### Red Flags
 
-- High distortion at corners
+- High distortion at image corners
 - Depth skew across image
-- Systematic reprojection bias
-- Large residual error in edge regions
+- Systematic reprojection bias (one camera consistently worse)
+- Mean epipolar error > 1.0 px
 
 If calibration quality is poor:
-- Re-evaluate image diversity
+- Re-evaluate image diversity (see Section 5.1)
 - Re-check pattern flatness
 - Confirm focus stability
+- Use per-pair error analysis to remove outlier captures
 
 ---
 

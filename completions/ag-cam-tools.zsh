@@ -106,6 +106,28 @@ _ag_cam_tools_calibration_capture() {
         '(-h --help)'{-h,--help}'[print this help]'
 }
 
+_ag_cam_tools_depth_preview() {
+    _arguments \
+        '(-a --address)-s[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-a --address)--serial=[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-s --serial)-a[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-s --serial)--address=[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-i --interface)'{-i,--interface}'=[force NIC selection]:interface:_net_interfaces' \
+        '(-f --fps)'{-f,--fps}'=[trigger rate in Hz]:rate:' \
+        '(-x --exposure)'{-x,--exposure}'=[exposure time in microseconds]:microseconds:' \
+        '(-g --gain)'{-g,--gain}'=[sensor gain in dB]:gain:' \
+        '(-A --auto-expose)'{-A,--auto-expose}'[auto-expose then lock]' \
+        '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
+        '(-p --packet-size)'{-p,--packet-size}'=[GigE packet size]:bytes:' \
+        '(-r --rectify)'{-r,--rectify}'=[calibration session folder]:session:_ag_cam_tools_calib_sessions' \
+        '--stereo-backend=[stereo disparity backend]:backend:(sgbm onnx igev foundation)' \
+        '--model-path=[path to ONNX model file]:file:_files' \
+        '--min-disparity=[override calibration min_disparity]:disparity:' \
+        '--num-disparities=[override calibration num_disparities]:disparities:' \
+        '--block-size=[SGBM block size]:size:' \
+        '(-h --help)'{-h,--help}'[print this help]'
+}
+
 _ag_cam_tools() {
     local -a subcmds
     subcmds=(
@@ -115,6 +137,7 @@ _ag_cam_tools() {
         'stream:Real-time stereo preview via SDL2'
         'focus:Real-time focus scoring for lens adjustment'
         'calibration-capture:Interactive stereo pair capture for calibration'
+        'depth-preview:Live depth map with selectable stereo backend'
     )
 
     if (( CURRENT == 2 )); then
@@ -127,6 +150,7 @@ _ag_cam_tools() {
             stream)  _ag_cam_tools_stream ;;
             focus)   _ag_cam_tools_focus ;;
             calibration-capture) _ag_cam_tools_calibration_capture ;;
+            depth-preview) _ag_cam_tools_depth_preview ;;
         esac
     fi
 }
