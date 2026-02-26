@@ -11,5 +11,8 @@ timm==0.5.4
 onnx>=1.14
 onnxsim>=0.4
 onnxruntime>=1.16
+onnxscript>=0.1
 numpy>=1.24
 Pillow>=9.0
+scipy>=1.10
+ipykernel>=6.0
