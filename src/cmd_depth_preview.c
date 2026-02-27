@@ -636,23 +636,23 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
             font_scale = out_w > 1200 ? 3 : 2;
             line_h = 7 * font_scale + 4;
 
-            snprintf (overlay[0], sizeof overlay[0], "block_size: %d",
+            snprintf (overlay[0], sizeof overlay[0], "[] blk: %d",
                       sgbm_params->block_size);
-            snprintf (overlay[1], sizeof overlay[1], "min_disp: %d",
+            snprintf (overlay[1], sizeof overlay[1], ";' min: %d",
                       sgbm_params->min_disparity);
-            snprintf (overlay[2], sizeof overlay[2], "num_disp: %d",
+            snprintf (overlay[2], sizeof overlay[2], "-= num: %d",
                       sgbm_params->num_disparities);
-            snprintf (overlay[3], sizeof overlay[3], "p1: %d",
+            snprintf (overlay[3], sizeof overlay[3], "zx p1: %d",
                       sgbm_effective_p1 (sgbm_params));
-            snprintf (overlay[4], sizeof overlay[4], "p2: %d",
+            snprintf (overlay[4], sizeof overlay[4], "cv p2: %d",
                       sgbm_effective_p2 (sgbm_params));
-            snprintf (overlay[5], sizeof overlay[5], "uniq: %d",
+            snprintf (overlay[5], sizeof overlay[5], "ui uniq: %d",
                       sgbm_params->uniqueness_ratio);
-            snprintf (overlay[6], sizeof overlay[6], "speckle_w: %d",
+            snprintf (overlay[6], sizeof overlay[6], "jk sp_w: %d",
                       sgbm_params->speckle_window_size);
-            snprintf (overlay[7], sizeof overlay[7], "speckle_r: %d",
+            snprintf (overlay[7], sizeof overlay[7], "nm sp_r: %d",
                       sgbm_params->speckle_range);
-            snprintf (overlay[8], sizeof overlay[8], "pre:%d d12:%d mode:%d",
+            snprintf (overlay[8], sizeof overlay[8], "hl pre:%d ,. d12:%d 90 m:%d",
                       sgbm_params->pre_filter_cap,
                       sgbm_params->disp12_max_diff,
                       sgbm_params->mode);
