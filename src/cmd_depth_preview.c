@@ -7,6 +7,7 @@
  */
 
 #include "common.h"
+#include "font.h"
 #include "remap.h"
 #include "stereo.h"
 #include "../vendor/argtable3.h"
@@ -622,6 +623,46 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
 
         SDL_RenderClear (renderer);
         SDL_RenderCopy (renderer, texture, NULL, NULL);
+
+        if (enable_runtime_tuning && backend == AG_STEREO_SGBM) {
+            int out_w, out_h;
+            int font_scale;
+            int line_h;
+            char overlay[9][48];
+
+            SDL_GetRendererOutputSize (renderer, &out_w, &out_h);
+            (void) out_h;
+
+            font_scale = out_w > 1200 ? 3 : 2;
+            line_h = 7 * font_scale + 4;
+
+            snprintf (overlay[0], sizeof overlay[0], "block_size: %d",
+                      sgbm_params->block_size);
+            snprintf (overlay[1], sizeof overlay[1], "min_disp: %d",
+                      sgbm_params->min_disparity);
+            snprintf (overlay[2], sizeof overlay[2], "num_disp: %d",
+                      sgbm_params->num_disparities);
+            snprintf (overlay[3], sizeof overlay[3], "p1: %d",
+                      sgbm_effective_p1 (sgbm_params));
+            snprintf (overlay[4], sizeof overlay[4], "p2: %d",
+                      sgbm_effective_p2 (sgbm_params));
+            snprintf (overlay[5], sizeof overlay[5], "uniq: %d",
+                      sgbm_params->uniqueness_ratio);
+            snprintf (overlay[6], sizeof overlay[6], "speckle_w: %d",
+                      sgbm_params->speckle_window_size);
+            snprintf (overlay[7], sizeof overlay[7], "speckle_r: %d",
+                      sgbm_params->speckle_range);
+            snprintf (overlay[8], sizeof overlay[8], "pre:%d d12:%d mode:%d",
+                      sgbm_params->pre_filter_cap,
+                      sgbm_params->disp12_max_diff,
+                      sgbm_params->mode);
+
+            for (int i = 0; i < 9; i++) {
+                ag_font_render (renderer, overlay[i], 8, 8 + line_h * i,
+                                font_scale, 0, 255, 0);
+            }
+        }
+
         SDL_RenderPresent (renderer);
 
         frames_displayed++;
