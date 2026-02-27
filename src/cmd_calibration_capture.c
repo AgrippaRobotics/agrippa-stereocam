@@ -91,7 +91,8 @@ static int
 calibration_capture_loop (const char *device_id, const char *iface_ip,
                           const char *output_dir, int target_count,
                           double fps, double exposure_us, double gain_db,
-                          gboolean auto_expose, int packet_size, int binning)
+                          gboolean auto_expose, int packet_size, int binning,
+                          gboolean enable_audio)
 {
     /* Build a unique session folder: calibration_<datetime>_<md5_prefix>
      * where the MD5 is derived from the capture parameters so identical
@@ -170,7 +171,8 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
     }
 
     /* SDL2 setup (video + audio for capture beep). */
-    if (SDL_Init (SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
+    if (SDL_Init (enable_audio ? (SDL_INIT_VIDEO | SDL_INIT_AUDIO)
+                               : SDL_INIT_VIDEO) != 0) {
         fprintf (stderr, "error: SDL_Init: %s\n", SDL_GetError ());
         g_free (session_dir);
         g_free (left_dir);
@@ -237,7 +239,8 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
     }
 
     /* Audio feedback for successful captures. */
-    audio_init ();
+    if (enable_audio)
+        audio_init ();
 
     /* Scratch buffers. */
     guint8 *rgb_left        = g_malloc ((size_t) proc_sub_w * proc_h * 3);
@@ -377,7 +380,8 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
 
             if (rc_left == EXIT_SUCCESS && rc_right == EXIT_SUCCESS) {
                 saved_count++;
-                audio_play_beep ();
+                if (enable_audio)
+                    audio_play_beep ();
                 printf ("  Saved pair %d / %d\n", saved_count, target_count);
 
                 snprintf (title, sizeof title,
@@ -461,7 +465,8 @@ cleanup:
     g_free (session_dir);
     g_free (left_dir);
     g_free (right_dir);
-    audio_cleanup ();
+    if (enable_audio)
+        audio_cleanup ();
     SDL_DestroyTexture (texture);
     SDL_DestroyRenderer (renderer);
     SDL_DestroyWindow (window);
@@ -500,11 +505,13 @@ cmd_calibration_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "sensor binning factor (default: 1)");
     struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
                                           "GigE packet size (default: auto-negotiate)");
+    struct arg_lit *quiet_audio = arg_lit0 ("q", "quiet-audio",
+                                            "disable capture confirmation audio");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
     void *argtable[] = { cmd, serial, address, interface, output, count,
                          fps_a, exposure, gain, auto_exp, binning_a,
-                         pkt_size, help, end };
+                         pkt_size, quiet_audio, help, end };
 
     int exitcode = EXIT_SUCCESS;
     if (arg_nullcheck (argtable) != 0) {
@@ -598,7 +605,8 @@ cmd_calibration_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
 
     exitcode = calibration_capture_loop (device_id, iface_ip, opt_output,
                                           target, fps, exposure_us, gain_db,
-                                          do_auto_expose, pkt_sz, binning);
+                                          do_auto_expose, pkt_sz, binning,
+                                          quiet_audio->count == 0);
     g_free (device_id);
 
 done:

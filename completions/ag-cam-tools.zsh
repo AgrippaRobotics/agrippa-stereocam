@@ -84,6 +84,7 @@ _ag_cam_tools_focus() {
         '(-f --fps)'{-f,--fps}'=[trigger rate in Hz]:rate:' \
         '(-x --exposure)'{-x,--exposure}'=[exposure time in microseconds]:microseconds:' \
         '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
+        '(-q --quiet-audio)'{-q,--quiet-audio}'[disable focus audio feedback]' \
         '*--roi=[region of interest x y w h]:roi:' \
         '(-h --help)'{-h,--help}'[print this help]'
 }
@@ -103,6 +104,7 @@ _ag_cam_tools_calibration_capture() {
         '(-A --auto-expose)'{-A,--auto-expose}'[auto-expose then lock]' \
         '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
         '(-p --packet-size)'{-p,--packet-size}'=[GigE packet size]:bytes:' \
+        '(-q --quiet-audio)'{-q,--quiet-audio}'[disable capture confirmation audio]' \
         '(-h --help)'{-h,--help}'[print this help]'
 }
 

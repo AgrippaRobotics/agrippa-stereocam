@@ -76,10 +76,10 @@ _ag_cam_tools() {
             COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -f --fps -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size -r --rectify -t --tag-size -h --help" -- "${cur}") )
             ;;
         focus)
-            COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -f --fps -x --exposure -b --binning --roi -h --help" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -f --fps -x --exposure -b --binning -q --quiet-audio --roi -h --help" -- "${cur}") )
             ;;
         calibration-capture)
-            COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -o --output -n --count -f --fps -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size -h --help" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -o --output -n --count -f --fps -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size -q --quiet-audio -h --help" -- "${cur}") )
             ;;
         depth-preview-classical|depth-preview-neural)
             COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -f --fps -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size -r --rectify --stereo-backend --model-path --min-disparity --num-disparities --block-size -h --help" -- "${cur}") )

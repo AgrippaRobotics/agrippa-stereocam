@@ -17,6 +17,7 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/common.c \
        $(SRCDIR)/image.c \
        $(SRCDIR)/focus.c \
+       $(SRCDIR)/focus_audio.c \
        $(SRCDIR)/cmd_connect.c \
        $(SRCDIR)/cmd_list.c \
        $(SRCDIR)/cmd_capture.c \

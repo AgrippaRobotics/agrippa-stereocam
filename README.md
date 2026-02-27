@@ -117,6 +117,7 @@ ag-cam-tools focus -a 192.168.0.201              # default: center 50% ROI, 10 H
 ag-cam-tools focus -a 192.168.0.201 --roi 200 200 600 400  # custom ROI
 ag-cam-tools focus -a 192.168.0.201 -x 30000 -g 6 -b 2     # with exposure, gain and binning
 ag-cam-tools focus -a 192.168.0.201 -A -b 2                 # auto-expose then focus
+ag-cam-tools focus -a 192.168.0.201 -q                     # disable audio feedback
 ```
 
 | Option | Description |
@@ -130,9 +131,12 @@ ag-cam-tools focus -a 192.168.0.201 -A -b 2                 # auto-expose then f
 | `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
 | `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
+| `-q`, `--quiet-audio` | Disable procedural focus audio feedback |
 | `--roi` | Region of interest as `x y w h` pixels (default: center 50%) |
 
-The SDL window shows: live stereo preview, green ROI rectangles, and per-eye focus scores with a delta indicator (turns red when left/right diverge). Scores are also printed to stdout once per second for logging.
+The SDL window shows: live stereo preview, green ROI rectangles, smoothed per-eye focus scores, a left/right delta percentage, and a lock status line (`ALIGNING` / `LOCKED`). The score overlay and audio path both use a 5-frame running average to reduce jitter. Lock engages when the normalized mismatch stays below 5% for at least 1 second. Scores are also printed to stdout once per second for logging.
+
+By default the focus tool also generates procedural stereo audio feedback: a beating convergence tone while the two eyes differ, then alternating left/right confirmation beeps once lock is achieved. Use `-q` to suppress audio entirely.
 
 Press `q` or `Esc` to quit.
 
@@ -147,6 +151,7 @@ ag-cam-tools calibration-capture -a 192.168.0.201 -A           # auto-expose, 30
 ag-cam-tools calibration-capture -a 192.168.0.201 -A -n 40     # 40 pairs target
 ag-cam-tools calibration-capture -a 192.168.0.201 -x 30000 -g 6 -o ./my_calib
 ag-cam-tools calibration-capture -a 192.168.0.201 -A -b 2      # use 2:1 binning (720×540)
+ag-cam-tools calibration-capture -a 192.168.0.201 -q           # disable save confirmation beep
 ```
 
 | Option | Description |
@@ -162,8 +167,9 @@ ag-cam-tools calibration-capture -a 192.168.0.201 -A -b 2      # use 2:1 binning
 | `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
 | `-b`, `--binning` | Sensor binning factor: `1` (default) or `2` |
 | `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
+| `-q`, `--quiet-audio` | Disable the capture confirmation beep |
 
-Press `s` to save the current pair, `q` or `Esc` to quit. The window title shows the running count. Images are saved as `imageL{N}.png` / `imageR{N}.png` (0-indexed) within the session folder.
+Press `s` to save the current pair, `q` or `Esc` to quit. The window title shows the running count. Images are saved as `imageL{N}.png` / `imageR{N}.png` (0-indexed) within the session folder. By default a short confirmation beep plays after each successful save; use `-q` to disable it.
 
 ### `depth-preview-classical`
 

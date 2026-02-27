@@ -8,6 +8,7 @@
 
 #include "common.h"
 #include "focus.h"
+#include "focus_audio.h"
 #include "font.h"
 #include "../vendor/argtable3.h"
 
@@ -20,6 +21,23 @@
 #include <SDL2/SDL.h>
 
 static volatile sig_atomic_t g_quit = 0;
+
+#define AG_FOCUS_LOCK_THRESHOLD      0.05f
+#define AG_FOCUS_LOCK_HOLD_SECONDS   1.0
+#define AG_FOCUS_SCORE_AVG_FRAMES    5
+
+static float
+focus_normalized_delta (double score_left, double score_right)
+{
+    double scale = fmax (fmax (score_left, score_right), 1.0);
+    double normalized = (score_right - score_left) / scale;
+
+    if (normalized < -1.0)
+        normalized = -1.0;
+    if (normalized > 1.0)
+        normalized = 1.0;
+    return (float) normalized;
+}
 
 static void
 sigint_handler (int sig)
@@ -34,7 +52,7 @@ focus_loop (const char *device_id, const char *iface_ip,
             gboolean auto_expose, int packet_size, int binning,
             int user_roi_x, int user_roi_y,
             int user_roi_w, int user_roi_h,
-            int roi_specified)
+            int roi_specified, gboolean enable_audio)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -85,7 +103,8 @@ focus_loop (const char *device_id, const char *iface_ip,
             roi_x, roi_y, roi_w, roi_h, proc_sub_w, proc_h);
 
     /* SDL2 setup. */
-    if (SDL_Init (SDL_INIT_VIDEO) != 0) {
+    if (SDL_Init (enable_audio ? (SDL_INIT_VIDEO | SDL_INIT_AUDIO)
+                               : SDL_INIT_VIDEO) != 0) {
         fprintf (stderr, "error: SDL_Init: %s\n", SDL_GetError ());
         g_object_unref (cfg.stream);
         g_object_unref (camera);
@@ -135,6 +154,9 @@ focus_loop (const char *device_id, const char *iface_ip,
         return EXIT_FAILURE;
     }
 
+    if (enable_audio)
+        focus_audio_init ();
+
     /* Scratch buffers. */
     guint8 *rgb_left        = g_malloc ((size_t) proc_sub_w * proc_h * 3);
     guint8 *rgb_right       = g_malloc ((size_t) proc_sub_w * proc_h * 3);
@@ -168,6 +190,18 @@ focus_loop (const char *device_id, const char *iface_ip,
 
     double score_left  = 0.0;
     double score_right = 0.0;
+    double raw_score_left = 0.0;
+    double raw_score_right = 0.0;
+    double score_history_left[AG_FOCUS_SCORE_AVG_FRAMES] = { 0 };
+    double score_history_right[AG_FOCUS_SCORE_AVG_FRAMES] = { 0 };
+    double score_sum_left = 0.0;
+    double score_sum_right = 0.0;
+    int score_history_count = 0;
+    int score_history_index = 0;
+    float normalized_delta = 0.0f;
+    double lock_stable_seconds = 0.0;
+    gboolean focus_locked = FALSE;
+    gint64 last_frame_time_us = g_get_monotonic_time ();
 
     while (!g_quit) {
         SDL_Event ev;
@@ -252,12 +286,46 @@ focus_loop (const char *device_id, const char *iface_ip,
         }
 
         /* Compute focus scores on raw bayer (before gamma). */
-        score_left  = compute_focus_score (bayer_left,
+        raw_score_left = compute_focus_score (bayer_left,
+                         (int) proc_sub_w, (int) proc_h,
+                         roi_x, roi_y, roi_w, roi_h);
+        raw_score_right = compute_focus_score (bayer_right,
                           (int) proc_sub_w, (int) proc_h,
                           roi_x, roi_y, roi_w, roi_h);
-        score_right = compute_focus_score (bayer_right,
-                          (int) proc_sub_w, (int) proc_h,
-                          roi_x, roi_y, roi_w, roi_h);
+
+        if (score_history_count < AG_FOCUS_SCORE_AVG_FRAMES) {
+            score_history_count++;
+        } else {
+            score_sum_left -= score_history_left[score_history_index];
+            score_sum_right -= score_history_right[score_history_index];
+        }
+
+        score_history_left[score_history_index] = raw_score_left;
+        score_history_right[score_history_index] = raw_score_right;
+        score_sum_left += raw_score_left;
+        score_sum_right += raw_score_right;
+        score_history_index = (score_history_index + 1) % AG_FOCUS_SCORE_AVG_FRAMES;
+
+        score_left = score_sum_left / (double) score_history_count;
+        score_right = score_sum_right / (double) score_history_count;
+        normalized_delta = focus_normalized_delta (score_left, score_right);
+        if (enable_audio)
+            focus_audio_update_delta (normalized_delta);
+
+        {
+            gint64 now_us = g_get_monotonic_time ();
+            double frame_dt = (double) (now_us - last_frame_time_us) / 1000000.0;
+            last_frame_time_us = now_us;
+
+            if (fabsf (normalized_delta) < AG_FOCUS_LOCK_THRESHOLD) {
+                lock_stable_seconds += frame_dt;
+                if (lock_stable_seconds >= AG_FOCUS_LOCK_HOLD_SECONDS)
+                    focus_locked = TRUE;
+            } else {
+                lock_stable_seconds = 0.0;
+                focus_locked = FALSE;
+            }
+        }
 
         /* Gamma + debayer for display. */
         size_t eye_n = (size_t) proc_sub_w * (size_t) proc_h;
@@ -322,11 +390,17 @@ focus_loop (const char *device_id, const char *iface_ip,
             snprintf (buf, sizeof buf, "right: %.2f", score_right);
             ag_font_render (renderer, buf, 8, 8 + line_h, font_scale, 0, 255, 0);
 
-            double delta = fabs (score_left - score_right);
-            snprintf (buf, sizeof buf, "delta: %.2f", delta);
+            double delta_pct = fabs ((double) normalized_delta) * 100.0;
+            snprintf (buf, sizeof buf, "delta: %.1f%%", delta_pct);
             ag_font_render (renderer, buf, 8, 8 + line_h * 2, font_scale,
-                            delta > 500.0 ? 255 : 0,
-                            delta > 500.0 ? 100 : 255,
+                            delta_pct > (AG_FOCUS_LOCK_THRESHOLD * 100.0) ? 255 : 0,
+                            delta_pct > (AG_FOCUS_LOCK_THRESHOLD * 100.0) ? 100 : 255,
+                            0);
+
+            snprintf (buf, sizeof buf, "lock: %s", focus_locked ? "LOCKED" : "ALIGNING");
+            ag_font_render (renderer, buf, 8, 8 + line_h * 3, font_scale,
+                            focus_locked ? 0 : 255,
+                            focus_locked ? 255 : 200,
                             0);
         }
 
@@ -369,6 +443,8 @@ cleanup:
     g_free (bayer_right);
     g_free (rgb_left);
     g_free (rgb_right);
+    if (enable_audio)
+        focus_audio_shutdown ();
     SDL_DestroyTexture (texture);
     SDL_DestroyRenderer (renderer);
     SDL_DestroyWindow (window);
@@ -403,13 +479,15 @@ cmd_focus (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "sensor binning factor (default: 1)");
     struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
                                           "GigE packet size (default: auto-negotiate)");
+    struct arg_lit *quiet_audio = arg_lit0 ("q", "quiet-audio",
+                                            "disable focus audio feedback");
     struct arg_int *roi_a     = arg_intn (NULL, "roi", "<x y w h>", 0, 4,
                                           "region of interest (default: center 50%%)");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
 
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
-                         gain, auto_exp, binning_a, pkt_size, roi_a,
+                         gain, auto_exp, binning_a, pkt_size, quiet_audio, roi_a,
                          help, end };
 
     int exitcode = EXIT_SUCCESS;
@@ -512,7 +590,8 @@ cmd_focus (int argc, char *argv[], arg_dstr_t res, void *ctx)
 
     exitcode = focus_loop (device_id, iface_ip, fps, exposure_us, gain_db,
                            do_auto_expose, pkt_sz, binning,
-                           uroi_x, uroi_y, uroi_w, uroi_h, roi_specified);
+                           uroi_x, uroi_y, uroi_w, uroi_h, roi_specified,
+                           quiet_audio->count == 0);
     g_free (device_id);
 
 done:
