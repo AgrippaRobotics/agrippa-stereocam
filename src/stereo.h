@@ -104,6 +104,14 @@ int ag_disparity_compute (AgDisparityContext *ctx,
                            const uint8_t *left, const uint8_t *right,
                            int16_t *disparity_out);
 
+/*
+ * Update SGBM parameters on an existing context.
+ * Applies only when ctx backend is AG_STEREO_SGBM.
+ * Returns 0 on success, -1 on unsupported backend or error.
+ */
+int ag_disparity_update_sgbm_params (AgDisparityContext *ctx,
+                                     const AgSgbmParams *params);
+
 /* Destroy context and free all backend resources. */
 void ag_disparity_destroy (AgDisparityContext *ctx);
 
@@ -144,6 +152,7 @@ void *ag_sgbm_create  (uint32_t width, uint32_t height,
 int   ag_sgbm_compute (void *sgbm_ptr, uint32_t width, uint32_t height,
                         const uint8_t *left, const uint8_t *right,
                         int16_t *disparity_out);
+int   ag_sgbm_update_params (void *sgbm_ptr, const AgSgbmParams *params);
 void  ag_sgbm_destroy (void *sgbm_ptr);
 #endif
 

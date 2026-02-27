@@ -107,6 +107,35 @@ ag_sgbm_compute (void *sgbm_ptr, uint32_t width, uint32_t height,
     return 0;
 }
 
+extern "C" int
+ag_sgbm_update_params (void *sgbm_ptr, const AgSgbmParams *params)
+{
+    if (!sgbm_ptr || !params)
+        return -1;
+
+    auto *handle = static_cast<SgbmHandle *> (sgbm_ptr);
+
+    int p1 = params->p1;
+    int p2 = params->p2;
+    if (p1 == 0)
+        p1 = 8 * params->block_size * params->block_size;
+    if (p2 == 0)
+        p2 = 32 * params->block_size * params->block_size;
+
+    handle->sgbm->setMinDisparity (params->min_disparity);
+    handle->sgbm->setNumDisparities (params->num_disparities);
+    handle->sgbm->setBlockSize (params->block_size);
+    handle->sgbm->setP1 (p1);
+    handle->sgbm->setP2 (p2);
+    handle->sgbm->setDisp12MaxDiff (params->disp12_max_diff);
+    handle->sgbm->setPreFilterCap (params->pre_filter_cap);
+    handle->sgbm->setUniquenessRatio (params->uniqueness_ratio);
+    handle->sgbm->setSpeckleWindowSize (params->speckle_window_size);
+    handle->sgbm->setSpeckleRange (params->speckle_range);
+    handle->sgbm->setMode (params->mode);
+    return 0;
+}
+
 extern "C" void
 ag_sgbm_destroy (void *sgbm_ptr)
 {

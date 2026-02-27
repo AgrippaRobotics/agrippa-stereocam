@@ -194,6 +194,28 @@ ag-cam-tools depth-preview -a 192.168.0.201 -A -r <session> --stereo-backend onn
 
 Press `q` or `Esc` to quit. Click on the disparity panel to print the disparity value at that pixel.
 
+#### Live SGBM tuning (runtime keyboard controls)
+
+When `--stereo-backend sgbm` is active, you can tune StereoSGBM parameters on the fly:
+
+| Keys | Parameter |
+|------|-----------|
+| `[` / `]` | `block_size` (`-2` / `+2`, kept odd) |
+| `;` / `'` | `min_disparity` (`-1` / `+1`) |
+| `-` / `=` | `num_disparities` (`-16` / `+16`, kept multiple of 16) |
+| `z` / `x` | `p1` (`-100` / `+100`) |
+| `c` / `v` | `p2` (`-100` / `+100`) |
+| `r` | Reset `p1`/`p2` to auto-derived values |
+| `u` / `i` | `uniqueness_ratio` (`-1` / `+1`) |
+| `j` / `k` | `speckle_window_size` (`-10` / `+10`) |
+| `n` / `m` | `speckle_range` (`-1` / `+1`) |
+| `h` / `l` | `pre_filter_cap` (`-1` / `+1`) |
+| `,` / `.` | `disp12_max_diff` (`-1` / `+1`) |
+| `9` / `0` | `mode` (`-1` / `+1`) |
+| `p` | Print current SGBM parameters |
+
+These controls are ignored for neural backends (`onnx`, `igev`, `rt-igev`, `foundation`).
+
 #### Stereo backends
 
 | Backend | Engine | Build requirement |

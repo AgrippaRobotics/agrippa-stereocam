@@ -187,6 +187,28 @@ ag_disparity_compute (AgDisparityContext *ctx,
     return -1;
 }
 
+int
+ag_disparity_update_sgbm_params (AgDisparityContext *ctx,
+                                 const AgSgbmParams *params)
+{
+    if (!ctx || !params)
+        return -1;
+
+    switch (ctx->backend) {
+#ifdef HAVE_OPENCV
+    case AG_STEREO_SGBM:
+        return ag_sgbm_update_params (ctx->u.sgbm.sgbm_ptr, params);
+#else
+    case AG_STEREO_SGBM:
+        return -1;
+#endif
+    case AG_STEREO_ONNX:
+        return -1;
+    }
+
+    return -1;
+}
+
 void
 ag_disparity_destroy (AgDisparityContext *ctx)
 {

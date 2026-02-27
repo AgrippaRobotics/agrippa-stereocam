@@ -84,6 +84,84 @@ load_calibration_meta (const char *session_path, CalibMeta *out)
     return 0;
 }
 
+static int
+clamp_int (int v, int lo, int hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static int
+normalize_num_disparities (int v)
+{
+    if (v < 16)
+        v = 16;
+    return ((v + 15) / 16) * 16;
+}
+
+static int
+normalize_block_size (int v)
+{
+    if (v < 1)
+        v = 1;
+    if ((v & 1) == 0)
+        v += 1;
+    if (v > 255)
+        v = 255;
+    if ((v & 1) == 0)
+        v -= 1;
+    return v;
+}
+
+static int
+sgbm_effective_p1 (const AgSgbmParams *p)
+{
+    if (p->p1 > 0)
+        return p->p1;
+    return 8 * p->block_size * p->block_size;
+}
+
+static int
+sgbm_effective_p2 (const AgSgbmParams *p)
+{
+    if (p->p2 > 0)
+        return p->p2;
+    return 32 * p->block_size * p->block_size;
+}
+
+static void
+print_sgbm_params (const AgSgbmParams *p)
+{
+    printf ("SGBM params: min=%d num=%d block=%d P1=%d%s P2=%d%s uniq=%d "
+            "speckleWin=%d speckleRange=%d preCap=%d disp12=%d mode=%d\n",
+            p->min_disparity, p->num_disparities, p->block_size,
+            sgbm_effective_p1 (p), p->p1 == 0 ? " (auto)" : "",
+            sgbm_effective_p2 (p), p->p2 == 0 ? " (auto)" : "",
+            p->uniqueness_ratio, p->speckle_window_size,
+            p->speckle_range, p->pre_filter_cap,
+            p->disp12_max_diff, p->mode);
+}
+
+static void
+print_sgbm_controls (void)
+{
+    printf ("Live SGBM controls:\n"
+            "  [ / ] block-size -/+2 (odd)\n"
+            "  ; / ' min-disparity -/+1\n"
+            "  - / = num-disparities -/+16\n"
+            "  z / x P1 -/+100 (explicit)\n"
+            "  c / v P2 -/+100 (explicit)\n"
+            "  r     reset P1/P2 to auto\n"
+            "  u / i uniqueness-ratio -/+1\n"
+            "  j / k speckle-window-size -/+10\n"
+            "  n / m speckle-range -/+1\n"
+            "  h / l pre-filter-cap -/+1\n"
+            "  , / . disp12-max-diff -/+1\n"
+            "  9 / 0 mode -/+1\n"
+            "  p     print current params\n");
+}
+
 /* ------------------------------------------------------------------ */
 /*  Depth preview loop                                                 */
 /* ------------------------------------------------------------------ */
@@ -159,6 +237,10 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     }
 
     printf ("Stereo backend: %s\n", ag_stereo_backend_name (backend));
+    if (backend == AG_STEREO_SGBM) {
+        print_sgbm_controls ();
+        print_sgbm_params (sgbm_params);
+    }
 
     /* SDL2 setup. */
     if (SDL_Init (SDL_INIT_VIDEO) != 0) {
@@ -258,6 +340,140 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
             if (ev.type == SDL_KEYDOWN &&
                 (ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q))
                 g_quit = 1;
+            if (ev.type == SDL_KEYDOWN && backend == AG_STEREO_SGBM) {
+                SDL_Keycode sym = ev.key.keysym.sym;
+                gboolean changed = FALSE;
+                gboolean print_only = FALSE;
+                AgSgbmParams next = *sgbm_params;
+
+                switch (sym) {
+                case SDLK_LEFTBRACKET:
+                    next.block_size = normalize_block_size (next.block_size - 2);
+                    changed = TRUE;
+                    break;
+                case SDLK_RIGHTBRACKET:
+                    next.block_size = normalize_block_size (next.block_size + 2);
+                    changed = TRUE;
+                    break;
+                case SDLK_SEMICOLON:
+                    next.min_disparity -= 1;
+                    changed = TRUE;
+                    break;
+                case SDLK_QUOTE:
+                    next.min_disparity += 1;
+                    changed = TRUE;
+                    break;
+                case SDLK_MINUS:
+                    next.num_disparities = normalize_num_disparities (
+                        next.num_disparities - 16);
+                    changed = TRUE;
+                    break;
+                case SDLK_EQUALS:
+                    next.num_disparities = normalize_num_disparities (
+                        next.num_disparities + 16);
+                    changed = TRUE;
+                    break;
+                case SDLK_z:
+                    next.p1 = clamp_int (sgbm_effective_p1 (sgbm_params) - 100,
+                                         0, 2000000);
+                    changed = TRUE;
+                    break;
+                case SDLK_x:
+                    next.p1 = clamp_int (sgbm_effective_p1 (sgbm_params) + 100,
+                                         0, 2000000);
+                    changed = TRUE;
+                    break;
+                case SDLK_c:
+                    next.p2 = clamp_int (sgbm_effective_p2 (sgbm_params) - 100,
+                                         0, 2000000);
+                    changed = TRUE;
+                    break;
+                case SDLK_v:
+                    next.p2 = clamp_int (sgbm_effective_p2 (sgbm_params) + 100,
+                                         0, 2000000);
+                    changed = TRUE;
+                    break;
+                case SDLK_r:
+                    next.p1 = 0;
+                    next.p2 = 0;
+                    changed = TRUE;
+                    break;
+                case SDLK_u:
+                    next.uniqueness_ratio = clamp_int (next.uniqueness_ratio - 1,
+                                                       0, 100);
+                    changed = TRUE;
+                    break;
+                case SDLK_i:
+                    next.uniqueness_ratio = clamp_int (next.uniqueness_ratio + 1,
+                                                       0, 100);
+                    changed = TRUE;
+                    break;
+                case SDLK_j:
+                    next.speckle_window_size = clamp_int (
+                        next.speckle_window_size - 10, 0, 10000);
+                    changed = TRUE;
+                    break;
+                case SDLK_k:
+                    next.speckle_window_size = clamp_int (
+                        next.speckle_window_size + 10, 0, 10000);
+                    changed = TRUE;
+                    break;
+                case SDLK_n:
+                    next.speckle_range = clamp_int (next.speckle_range - 1,
+                                                    0, 1000);
+                    changed = TRUE;
+                    break;
+                case SDLK_m:
+                    next.speckle_range = clamp_int (next.speckle_range + 1,
+                                                    0, 1000);
+                    changed = TRUE;
+                    break;
+                case SDLK_h:
+                    next.pre_filter_cap = clamp_int (next.pre_filter_cap - 1,
+                                                     1, 63);
+                    changed = TRUE;
+                    break;
+                case SDLK_l:
+                    next.pre_filter_cap = clamp_int (next.pre_filter_cap + 1,
+                                                     1, 63);
+                    changed = TRUE;
+                    break;
+                case SDLK_COMMA:
+                    next.disp12_max_diff = clamp_int (next.disp12_max_diff - 1,
+                                                      -1, 1000);
+                    changed = TRUE;
+                    break;
+                case SDLK_PERIOD:
+                    next.disp12_max_diff = clamp_int (next.disp12_max_diff + 1,
+                                                      -1, 1000);
+                    changed = TRUE;
+                    break;
+                case SDLK_9:
+                    next.mode = clamp_int (next.mode - 1, 0, 3);
+                    changed = TRUE;
+                    break;
+                case SDLK_0:
+                    next.mode = clamp_int (next.mode + 1, 0, 3);
+                    changed = TRUE;
+                    break;
+                case SDLK_p:
+                    print_only = TRUE;
+                    break;
+                default:
+                    break;
+                }
+
+                if (print_only)
+                    print_sgbm_params (sgbm_params);
+                if (changed) {
+                    if (ag_disparity_update_sgbm_params (disp_ctx, &next) == 0) {
+                        *sgbm_params = next;
+                        print_sgbm_params (sgbm_params);
+                    } else {
+                        fprintf (stderr, "warn: failed to apply SGBM params\n");
+                    }
+                }
+            }
             /* Mouse click on disparity panel: print depth. */
             if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
                 int out_w, out_h;
