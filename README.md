@@ -9,10 +9,10 @@ AprilTag detection in `stream` uses apriltag3 via:
 - system install (`pkg-config apriltag`) if available, or
 - vendored submodule fallback at `vendor/apriltag`.
 
-OpenCV StereoSGBM backend for `depth-preview` uses OpenCV 4 via:
+OpenCV StereoSGBM backend for `depth-preview-classical` / `depth-preview-neural` uses OpenCV 4 via:
 - system install (`pkg-config opencv4`) — optional, enables `--stereo-backend sgbm`.
 
-ONNX Runtime backend for `depth-preview` uses ONNX Runtime via:
+ONNX Runtime backend for `depth-preview-neural` uses ONNX Runtime via:
 - system install (`pkg-config libonnxruntime`) — optional, enables `--stereo-backend onnx`.
 - or set `ONNXRUNTIME_HOME=/path/to/onnxruntime` for manual installs (e.g. Jetson).
 
@@ -38,7 +38,8 @@ ag-cam-tools <command> [options]
 | `stream` | Real-time stereo preview via SDL2 |
 | `focus` | Real-time focus scoring for lens adjustment |
 | `calibration-capture` | Interactive stereo pair capture for calibration |
-| `depth-preview` | Live depth map with selectable stereo backend |
+| `depth-preview-classical` | Live depth map with classical backend controls |
+| `depth-preview-neural` | Live depth map with neural backend controls |
 
 ### `list`
 
@@ -164,14 +165,13 @@ ag-cam-tools calibration-capture -a 192.168.0.201 -A -b 2      # use 2:1 binning
 
 Press `s` to save the current pair, `q` or `Esc` to quit. The window title shows the running count. Images are saved as `imageL{N}.png` / `imageR{N}.png` (0-indexed) within the session folder.
 
-### `depth-preview`
+### `depth-preview-classical`
 
-Live stereo depth preview with selectable disparity backend. Displays the rectified left eye alongside a JET-coloured disparity map. Requires a completed calibration session (rectification maps).
+Live stereo depth preview with classical disparity backend controls. Displays the rectified left eye alongside a JET-coloured disparity map. Requires a completed calibration session (rectification maps).
 
 ```bash
-ag-cam-tools depth-preview -a 192.168.0.201 -A -r calibration/calibration_20260225_143015_a1b2c3d4
-ag-cam-tools depth-preview -a 192.168.0.201 -A -r <session> --stereo-backend sgbm --block-size 7
-ag-cam-tools depth-preview -a 192.168.0.201 -A -r <session> --stereo-backend onnx --model-path model.onnx
+ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r calibration/calibration_20260225_143015_a1b2c3d4
+ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r <session> --stereo-backend sgbm --block-size 7
 ```
 
 | Option | Description |
@@ -196,7 +196,7 @@ Press `q` or `Esc` to quit. Click on the disparity panel to print the disparity 
 
 #### Live SGBM tuning (runtime keyboard controls)
 
-When `--stereo-backend sgbm` is active, you can tune StereoSGBM parameters on the fly:
+When `--stereo-backend sgbm` is active in `depth-preview-classical`, you can tune StereoSGBM parameters on the fly:
 
 | Keys | Parameter |
 |------|-----------|
@@ -214,7 +214,17 @@ When `--stereo-backend sgbm` is active, you can tune StereoSGBM parameters on th
 | `9` / `0` | `mode` (`-1` / `+1`) |
 | `p` | Print current SGBM parameters |
 
-These controls are ignored for neural backends (`onnx`, `igev`, `rt-igev`, `foundation`).
+### `depth-preview-neural`
+
+Live stereo depth preview intended for neural stereo backends. Displays the rectified left eye alongside a JET-coloured disparity map.
+
+```bash
+ag-cam-tools depth-preview-neural -a 192.168.0.201 -A -r calibration/calibration_20260225_143015_a1b2c3d4 --stereo-backend onnx --model-path model.onnx
+ag-cam-tools depth-preview-neural -a 192.168.0.201 -A -r <session> --stereo-backend igev
+```
+
+`depth-preview-neural` uses the same CLI options as `depth-preview-classical`, including `--stereo-backend` (default: `sgbm`) and `--model-path` for ONNX models.
+Runtime SGBM keyboard tuning controls are not enabled in this command.
 
 #### Stereo backends
 

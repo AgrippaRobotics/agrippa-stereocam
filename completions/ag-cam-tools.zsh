@@ -120,7 +120,7 @@ _ag_cam_tools_depth_preview() {
         '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
         '(-p --packet-size)'{-p,--packet-size}'=[GigE packet size]:bytes:' \
         '(-r --rectify)'{-r,--rectify}'=[calibration session folder]:session:_ag_cam_tools_calib_sessions' \
-        '--stereo-backend=[stereo disparity backend]:backend:(sgbm onnx igev foundation)' \
+        '--stereo-backend=[stereo disparity backend]:backend:(sgbm onnx igev rt-igev foundation)' \
         '--model-path=[path to ONNX model file]:file:_files' \
         '--min-disparity=[override calibration min_disparity]:disparity:' \
         '--num-disparities=[override calibration num_disparities]:disparities:' \
@@ -137,7 +137,8 @@ _ag_cam_tools() {
         'stream:Real-time stereo preview via SDL2'
         'focus:Real-time focus scoring for lens adjustment'
         'calibration-capture:Interactive stereo pair capture for calibration'
-        'depth-preview:Live depth map with selectable stereo backend'
+        'depth-preview-classical:Live depth map with classical backend controls'
+        'depth-preview-neural:Live depth map with neural backend controls'
     )
 
     if (( CURRENT == 2 )); then
@@ -150,7 +151,8 @@ _ag_cam_tools() {
             stream)  _ag_cam_tools_stream ;;
             focus)   _ag_cam_tools_focus ;;
             calibration-capture) _ag_cam_tools_calibration_capture ;;
-            depth-preview) _ag_cam_tools_depth_preview ;;
+            depth-preview-classical) _ag_cam_tools_depth_preview ;;
+            depth-preview-neural) _ag_cam_tools_depth_preview ;;
         esac
     fi
 }

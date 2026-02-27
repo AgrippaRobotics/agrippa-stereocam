@@ -15,7 +15,8 @@ int cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_stream  (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_focus   (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_calibration_capture (int argc, char *argv[], arg_dstr_t res, void *ctx);
-int cmd_depth_preview (int argc, char *argv[], arg_dstr_t res, void *ctx);
+int cmd_depth_preview_classical (int argc, char *argv[], arg_dstr_t res, void *ctx);
+int cmd_depth_preview_neural (int argc, char *argv[], arg_dstr_t res, void *ctx);
 
 static void
 print_usage (void)
@@ -33,8 +34,10 @@ print_usage (void)
             "  focus     Real-time focus scoring for lens adjustment\n"
             "  calibration-capture\n"
             "            Interactive stereo pair capture for calibration\n"
-            "  depth-preview\n"
-            "            Live depth map with selectable stereo backend\n"
+            "  depth-preview-classical\n"
+            "            Live depth map with classical backend controls\n"
+            "  depth-preview-neural\n"
+            "            Live depth map with neural backend controls\n"
             "\n"
             "Run 'ag-cam-tools <command> --help' for command-specific options.\n");
 }
@@ -58,8 +61,10 @@ main (int argc, char *argv[])
                       "Real-time focus scoring for lens adjustment", NULL);
     arg_cmd_register ("calibration-capture", cmd_calibration_capture,
                       "Interactive stereo pair capture for calibration", NULL);
-    arg_cmd_register ("depth-preview", cmd_depth_preview,
-                      "Live depth map with selectable stereo backend", NULL);
+    arg_cmd_register ("depth-preview-classical", cmd_depth_preview_classical,
+                      "Live depth map with classical backend controls", NULL);
+    arg_cmd_register ("depth-preview-neural", cmd_depth_preview_neural,
+                      "Live depth map with neural backend controls", NULL);
 
     if (argc < 2 ||
         strcmp (argv[1], "--help") == 0 ||

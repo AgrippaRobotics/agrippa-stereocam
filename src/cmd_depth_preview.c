@@ -1,5 +1,5 @@
 /*
- * cmd_depth_preview.c — "ag-cam-tools depth-preview" subcommand
+ * cmd_depth_preview.c — depth preview subcommands
  *
  * Live stereo depth preview: acquires rectified stereo frames, computes
  * disparity via a selectable backend (StereoSGBM, IGEV++, FoundationStereo),
@@ -171,7 +171,8 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                     double fps, double exposure_us, double gain_db,
                     gboolean auto_expose, int packet_size, int binning,
                     const char *rectify_path, AgStereoBackend backend,
-                    AgSgbmParams *sgbm_params, const AgOnnxParams *onnx_params)
+                    AgSgbmParams *sgbm_params, const AgOnnxParams *onnx_params,
+                    gboolean enable_runtime_tuning)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -237,7 +238,7 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     }
 
     printf ("Stereo backend: %s\n", ag_stereo_backend_name (backend));
-    if (backend == AG_STEREO_SGBM) {
+    if (enable_runtime_tuning && backend == AG_STEREO_SGBM) {
         print_sgbm_controls ();
         print_sgbm_params (sgbm_params);
     }
@@ -340,7 +341,9 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
             if (ev.type == SDL_KEYDOWN &&
                 (ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q))
                 g_quit = 1;
-            if (ev.type == SDL_KEYDOWN && backend == AG_STEREO_SGBM) {
+            if (ev.type == SDL_KEYDOWN &&
+                enable_runtime_tuning &&
+                backend == AG_STEREO_SGBM) {
                 SDL_Keycode sym = ev.key.keysym.sym;
                 gboolean changed = FALSE;
                 gboolean print_only = FALSE;
@@ -676,12 +679,13 @@ cleanup:
 /*  Subcommand entry point                                             */
 /* ------------------------------------------------------------------ */
 
-int
-cmd_depth_preview (int argc, char *argv[], arg_dstr_t res, void *ctx)
+static int
+cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
+                        const char *cmd_name, gboolean enable_runtime_tuning)
 {
     (void) ctx;
 
-    struct arg_str *cmd       = arg_str1 (NULL, NULL, "depth-preview", NULL);
+    struct arg_str *cmd       = arg_str1 (NULL, NULL, cmd_name, NULL);
     struct arg_str *serial    = arg_str0 ("s", "serial",    "<serial>",
                                           "match by serial number");
     struct arg_str *address   = arg_str0 ("a", "address",   "<address>",
@@ -733,7 +737,7 @@ cmd_depth_preview (int argc, char *argv[], arg_dstr_t res, void *ctx)
     binning_a->ival[0] = 1;
 
     int nerrors = arg_parse (argc, argv, argtable);
-    if (arg_make_syntax_err_help_msg (res, "depth-preview", help->count,
+    if (arg_make_syntax_err_help_msg (res, cmd_name, help->count,
                                        nerrors, argtable, end, &exitcode))
         goto done;
 
@@ -860,10 +864,25 @@ cmd_depth_preview (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                     exposure_us, gain_db,
                                     do_auto_expose, pkt_sz, binning,
                                     rectify->sval[0], backend,
-                                    &sgbm_params, &onnx_params);
+                                    &sgbm_params, &onnx_params,
+                                    enable_runtime_tuning);
     g_free (device_id);
 
 done:
     arg_freetable (argtable, sizeof argtable / sizeof argtable[0]);
     return exitcode;
+}
+
+int
+cmd_depth_preview_classical (int argc, char *argv[], arg_dstr_t res, void *ctx)
+{
+    return cmd_depth_preview_impl (argc, argv, res, ctx,
+                                   "depth-preview-classical", TRUE);
+}
+
+int
+cmd_depth_preview_neural (int argc, char *argv[], arg_dstr_t res, void *ctx)
+{
+    return cmd_depth_preview_impl (argc, argv, res, ctx,
+                                   "depth-preview-neural", FALSE);
 }
