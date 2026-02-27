@@ -13,6 +13,7 @@
 
 #include "common.h"
 #include "image.h"
+#include "font.h"
 #include "../vendor/argtable3.h"
 
 #include <glib/gstdio.h>
@@ -425,6 +426,19 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
 
         SDL_RenderClear (renderer);
         SDL_RenderCopy (renderer, texture, NULL, NULL);
+
+        /* Capture progress text overlay. */
+        {
+            int out_w, out_h;
+            SDL_GetRendererOutputSize (renderer, &out_w, &out_h);
+            int font_scale = out_w > 1200 ? 3 : 2;
+            char overlay[96];
+
+            snprintf (overlay, sizeof overlay, "captured: %d of %d",
+                      saved_count, target_count);
+            ag_font_render (renderer, overlay, 8, 8, font_scale, 0, 255, 0);
+        }
+
         SDL_RenderPresent (renderer);
 
         g_usleep ((gulong) trigger_interval_us);
