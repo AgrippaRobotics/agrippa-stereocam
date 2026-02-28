@@ -5,8 +5,8 @@ Live stereo depth preview intended for ONNX-based stereo models. It uses the sam
 ## Examples
 
 ```bash
-ag-cam-tools depth-preview-neural -a 192.168.0.201 -A -r calibration/calibration_20260225_143015_a1b2c3d4 --stereo-backend onnx --model-path model.onnx
-ag-cam-tools depth-preview-neural -a 192.168.0.201 -A -r device:// --stereo-backend igev
+ag-cam-tools depth-preview-neural -a 192.168.0.201 -A --calibration-local calibration/calibration_20260225_143015_a1b2c3d4 --stereo-backend onnx --model-path model.onnx
+ag-cam-tools depth-preview-neural -a 192.168.0.201 -A --calibration-slot 0 --stereo-backend igev
 ```
 
 ## Backend summary

@@ -7,6 +7,8 @@
 
 #include <glib.h>
 
+#include "remap.h"
+
 typedef enum { AG_ENC_PGM, AG_ENC_PNG, AG_ENC_JPG } AgEncFormat;
 
 /* Parse "pgm", "png", "jpg"/"jpeg" into AgEncFormat.  Returns 0 on
@@ -26,10 +28,14 @@ int write_gray_image (AgEncFormat enc, const char *path,
 
 /*
  * Full DualBayer pipeline: deinterleave, optional software binning,
- * gamma-correct, debayer, encode left+right images.
+ * gamma-correct, debayer, optional rectification, encode left+right images.
  *
  * When data_is_bayer is FALSE (binned data), PNG/JPEG output is saved
  * as grayscale instead of incorrectly debayering.
+ *
+ * When remap_left/remap_right are non-NULL, rectification is applied
+ * after debayering (or gray expansion) and before encoding.
+ * Pass NULL for both to skip rectification (backward compatible).
  */
 int write_dual_bayer_pair (const char *output_dir,
                            const char *basename_no_ext,
@@ -37,6 +43,8 @@ int write_dual_bayer_pair (const char *output_dir,
                            guint width, guint height,
                            AgEncFormat enc,
                            int software_binning,
-                           gboolean data_is_bayer);
+                           gboolean data_is_bayer,
+                           const AgRemapTable *remap_left,
+                           const AgRemapTable *remap_right);
 
 #endif /* AG_IMAGE_H */

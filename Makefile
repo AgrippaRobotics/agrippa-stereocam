@@ -30,6 +30,7 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/cmd_depth_preview.c \
        $(SRCDIR)/device_file.c \
        $(SRCDIR)/calib_archive.c \
+       $(SRCDIR)/calib_load.c \
        $(SRCDIR)/cmd_calibration_stash.c
 
 VENDOR_SRCS = $(VENDORDIR)/argtable3.c \
@@ -167,14 +168,18 @@ $(BINDIR)/test_remap: $(TESTDIR)/test_remap.c $(BINDIR)/remap.o | $(BINDIR)
 $(BINDIR)/test_binning: $(TESTDIR)/test_binning.c $(BINDIR)/imgproc.o | $(BINDIR)
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(BINDIR)/imgproc.o $(TEST_LIBS)
 
+$(BINDIR)/test_calib_load: $(TESTDIR)/test_calib_load.c $(TEST_OBJS) $(BINDIR)/calib_load.o | $(BINDIR)
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(TEST_OBJS) $(BINDIR)/calib_load.o $(TEST_LIBS)
+
 $(BINDIR)/gen_test_calibration: $(TESTDIR)/gen_test_calibration.c | $(BINDIR)
 	$(CC) -Wall -O2 -o $@ $<
 
-test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning
+test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning $(BINDIR)/test_calib_load
 	@echo "=== Unit Tests ==="
 	$(BINDIR)/test_calib_archive
 	$(BINDIR)/test_remap
 	$(BINDIR)/test_binning
+	$(BINDIR)/test_calib_load
 
 # ---- Hardware Integration Tests (camera required) ---------------------
 
@@ -182,6 +187,7 @@ test-hw: $(TARGET) $(BINDIR)/gen_test_calibration
 	@echo "=== Hardware Integration Tests ==="
 	$(TESTDIR)/test_stash_hw.sh
 	$(TESTDIR)/test_binning_hw.sh
+	$(TESTDIR)/test_capture_rectify_hw.sh
 
 test-all: test test-hw
 

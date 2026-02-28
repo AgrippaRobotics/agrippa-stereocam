@@ -7,8 +7,7 @@
  */
 
 #include "common.h"
-#include "calib_archive.h"
-#include "device_file.h"
+#include "calib_load.h"
 #include "remap.h"
 #include "../vendor/argtable3.h"
 
@@ -120,7 +119,7 @@ static int
 stream_loop (const char *device_id, const char *iface_ip,
              double fps, double exposure_us, double gain_db,
              gboolean auto_expose, int packet_size, int binning,
-             double tag_size_m, const char *rectify_path)
+             double tag_size_m, const AgCalibSource *calib_src)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -249,73 +248,11 @@ stream_loop (const char *device_id, const char *iface_ip,
     guint8 *rect_left  = NULL;
     guint8 *rect_right = NULL;
 
-    if (rectify_path &&
-        strncmp (rectify_path, "device://", 9) == 0) {
-        /* Load calibration archive from camera file storage.
-         * "device://" = slot 0, "device://2" = slot 2, etc. */
-        int calib_slot = 0;
-        if (rectify_path[9] != '\0')
-            calib_slot = atoi (rectify_path + 9);
-
-        uint8_t *archive_data = NULL;
-        size_t   archive_len  = 0;
-
-        printf ("Reading calibration from camera (slot %d)...\n", calib_slot);
-        if (ag_device_file_read (device, "UserFile1",
-                                  &archive_data, &archive_len) != 0) {
-            fprintf (stderr, "error: failed to read calibration from camera\n");
+    if (calib_src->local_path || calib_src->slot >= 0) {
+        if (ag_calib_load (device, calib_src,
+                            &remap_left, &remap_right, NULL) != 0)
             goto cleanup;
-        }
 
-        /* Extract the requested slot (handles AGMS and legacy AGST). */
-        const uint8_t *slot_data = NULL;
-        size_t         slot_len  = 0;
-        if (ag_multislot_extract_slot (archive_data, archive_len,
-                                        calib_slot,
-                                        &slot_data, &slot_len) != 0) {
-            fprintf (stderr, "error: calibration slot %d not found\n",
-                     calib_slot);
-            g_free (archive_data);
-            goto cleanup;
-        }
-
-        AgCalibMeta meta_unused = {0};
-        if (ag_calib_archive_unpack (slot_data, slot_len,
-                                      &remap_left, &remap_right,
-                                      &meta_unused) != 0) {
-            fprintf (stderr, "error: failed to unpack calibration archive\n");
-            g_free (archive_data);
-            goto cleanup;
-        }
-        g_free (archive_data);
-
-        if (remap_left->width != proc_sub_w || remap_left->height != proc_h) {
-            fprintf (stderr,
-                     "error: remap dimensions %ux%u do not match frame %ux%u\n",
-                     remap_left->width, remap_left->height,
-                     proc_sub_w, proc_h);
-            goto cleanup;
-        }
-
-        rect_left  = g_malloc ((size_t) proc_sub_w * proc_h * 3);
-        rect_right = g_malloc ((size_t) proc_sub_w * proc_h * 3);
-        printf ("Rectification enabled from device (%ux%u maps loaded).\n",
-                proc_sub_w, proc_h);
-    } else if (rectify_path) {
-        char *lpath = g_build_filename (rectify_path, "calib_result",
-                                        "remap_left.bin", NULL);
-        char *rpath = g_build_filename (rectify_path, "calib_result",
-                                        "remap_right.bin", NULL);
-        remap_left  = ag_remap_table_load (lpath);
-        remap_right = ag_remap_table_load (rpath);
-        g_free (lpath);
-        g_free (rpath);
-
-        if (!remap_left || !remap_right) {
-            fprintf (stderr, "error: failed to load remap tables from %s\n",
-                     rectify_path);
-            goto cleanup;
-        }
         if (remap_left->width != proc_sub_w || remap_left->height != proc_h) {
             fprintf (stderr,
                      "error: remap dimensions %ux%u do not match frame %ux%u\n",
@@ -607,8 +544,10 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "sensor binning factor (default: 1)");
     struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
                                           "GigE packet size (default: auto-negotiate)");
-    struct arg_str *rectify   = arg_str0 ("r", "rectify",  "<session|device://[slot]>",
-                                          "rectify using session folder or device://[0-2]");
+    struct arg_str *calib_local = arg_str0 (NULL, "calibration-local", "<path>",
+                                            "rectify using local calibration session");
+    struct arg_int *calib_slot  = arg_int0 (NULL, "calibration-slot", "<0-2>",
+                                            "rectify using on-camera calibration slot");
 #ifdef HAVE_APRILTAG
     struct arg_dbl *tag_size  = arg_dbl0 ("t", "tag-size",  "<meters>",
                                           "AprilTag size in meters (enables detection)");
@@ -618,11 +557,13 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
 
 #ifdef HAVE_APRILTAG
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
-                         gain, auto_exp, binning_a, pkt_size, rectify,
+                         gain, auto_exp, binning_a, pkt_size,
+                         calib_local, calib_slot,
                          tag_size, help, end };
 #else
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
-                         gain, auto_exp, binning_a, pkt_size, rectify,
+                         gain, auto_exp, binning_a, pkt_size,
+                         calib_local, calib_slot,
                          help, end };
 #endif
 
@@ -689,6 +630,35 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
         goto done;
     }
 
+    /* Validate calibration args (mutually exclusive). */
+    if (calib_local->count && calib_slot->count) {
+        arg_dstr_catf (res, "error: --calibration-local and --calibration-slot "
+                       "are mutually exclusive\n");
+        exitcode = EXIT_FAILURE;
+        goto done;
+    }
+    if (calib_slot->count) {
+        int s = calib_slot->ival[0];
+        if (s < 0 || s > 2) {
+            arg_dstr_catf (res, "error: --calibration-slot must be 0, 1, or 2\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+    }
+
+    AgCalibSource calib_src = { .local_path = NULL, .slot = -1 };
+    if (calib_local->count)
+        calib_src.local_path = calib_local->sval[0];
+    else if (calib_slot->count)
+        calib_src.slot = calib_slot->ival[0];
+
+    if (calib_src.local_path)
+        printf ("Rectification enabled (calibration from %s).\n",
+                calib_src.local_path);
+    else if (calib_src.slot >= 0)
+        printf ("Rectification enabled (calibration from camera slot %d).\n",
+                calib_src.slot);
+
     double tag_size_m = 0.0;
 #ifdef HAVE_APRILTAG
     if (tag_size->count) {
@@ -716,11 +686,10 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
     if (!device_id) { exitcode = EXIT_FAILURE; goto done; }
 
     int pkt_sz = pkt_size->count ? pkt_size->ival[0] : 0;
-    const char *opt_rectify = rectify->count ? rectify->sval[0] : NULL;
 
     exitcode = stream_loop (device_id, iface_ip, fps, exposure_us, gain_db,
                             do_auto_expose, pkt_sz, binning, tag_size_m,
-                            opt_rectify);
+                            &calib_src);
     g_free (device_id);
 
 done:

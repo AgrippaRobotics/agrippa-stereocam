@@ -2,7 +2,7 @@
 
 Manage calibration data stored in the camera's persistent UserFile storage.
 
-This allows multiple hosts to use the same on-camera calibration through `--rectify device://` without keeping local copies synchronized.
+This allows multiple hosts to use the same on-camera calibration through `--calibration-slot` without keeping local copies synchronized.
 
 ## Examples
 

@@ -9,8 +9,8 @@ ag-cam-tools stream -a 192.168.0.201 -f 10
 ag-cam-tools stream -a 192.168.0.201 -f 5 -b 2 -x 30000 -g 12
 ag-cam-tools stream -a 192.168.0.201 -A -f 10
 ag-cam-tools stream -a 192.168.0.201 -t 0.05
-ag-cam-tools stream -a 192.168.0.201 -r calibration/calibration_20260225_143015_a1b2c3d4
-ag-cam-tools stream -a 192.168.0.201 -r device://
+ag-cam-tools stream -a 192.168.0.201 --calibration-local calibration/calibration_20260225_143015_a1b2c3d4
+ag-cam-tools stream -a 192.168.0.201 --calibration-slot 0
 ```
 
 ## Options
@@ -26,15 +26,16 @@ ag-cam-tools stream -a 192.168.0.201 -r device://
 | `-A`, `--auto-expose` | Auto-expose and then lock |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
 | `-p`, `--packet-size` | GigE packet size in bytes |
-| `-r`, `--rectify` | Calibration session path or `device://` |
+| `--calibration-local` | Calibration session directory on disk |
+| `--calibration-slot` | On-camera calibration slot: `0`, `1`, or `2` |
 | `-t`, `--tag-size` | AprilTag size in meters |
 
-## Rectification sources
+## Rectification
 
-When `--rectify` is given, the command loads precomputed remap tables from either:
+Supplying `--calibration-local` or `--calibration-slot` enables stereo rectification. The two options are mutually exclusive.
 
-- a calibration session directory on disk,
-- or `device://` to read the calibration archive stored on the camera.
+- `--calibration-local` loads remap tables from a calibration session directory on the local filesystem.
+- `--calibration-slot` loads remap tables from a numbered slot (0-2) stored on the camera via `calibration-stash upload`.
 
 On ARM64 platforms, the remap path uses NEON acceleration.
 

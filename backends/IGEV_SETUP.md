@@ -111,8 +111,8 @@ scp models/igev_plusplus.onnx jetson:~/agrippa-stereocam/models/
 ### 9. Run depth-preview with IGEV++
 
 ```bash
-ag-cam-tools depth-preview \
-    --rectify calibration/calibration_YYYYMMDD_HHMMSS \
+ag-cam-tools depth-preview-neural \
+    --calibration-local calibration/calibration_YYYYMMDD_HHMMSS \
     --stereo-backend onnx \
     --model-path models/igev_plusplus.onnx
 ```

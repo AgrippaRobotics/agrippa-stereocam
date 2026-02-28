@@ -5,9 +5,9 @@ Live stereo depth preview using a rectified input pair and a classical disparity
 ## Examples
 
 ```bash
-ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r calibration/calibration_20260225_143015_a1b2c3d4
-ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r device://
-ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r <session> --stereo-backend sgbm --block-size 7
+ag-cam-tools depth-preview-classical -a 192.168.0.201 -A --calibration-local calibration/calibration_20260225_143015_a1b2c3d4
+ag-cam-tools depth-preview-classical -a 192.168.0.201 -A --calibration-slot 0
+ag-cam-tools depth-preview-classical -a 192.168.0.201 -A --calibration-local <session> --stereo-backend sgbm --block-size 7
 ```
 
 ## Options
@@ -23,7 +23,8 @@ ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r <session> --stereo-b
 | `-A`, `--auto-expose` | Auto-expose and then lock |
 | `-b`, `--binning` | Sensor binning factor |
 | `-p`, `--packet-size` | GigE packet size in bytes |
-| `-r`, `--rectify` | Required calibration session path or `device://` |
+| `--calibration-local` | Calibration session directory on disk (at least one calibration source required) |
+| `--calibration-slot` | On-camera calibration slot: `0`, `1`, or `2` (at least one calibration source required) |
 | `--stereo-backend` | `sgbm` by default, with `onnx` also available |
 | `--model-path` | Required when `--stereo-backend onnx` is used |
 | `--min-disparity` | Override calibration metadata |

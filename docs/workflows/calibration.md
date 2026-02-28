@@ -62,9 +62,10 @@ Each calibration session produces a `calib_result/` directory containing:
 
 Those outputs are used by:
 
-- `ag-cam-tools stream --rectify <session>`
-- `ag-cam-tools depth-preview-classical --rectify <session>`
-- `ag-cam-tools depth-preview-neural --rectify <session>`
+- `ag-cam-tools capture --calibration-local <session>`
+- `ag-cam-tools stream --calibration-local <session>`
+- `ag-cam-tools depth-preview-classical --calibration-local <session>`
+- `ag-cam-tools depth-preview-neural --calibration-local <session>`
 - `ag-cam-tools calibration-stash upload <session>`
 
-You can also store the result on-camera and load it later with `device://`.
+You can also store the result on-camera and load it later with `--calibration-slot`.

@@ -17,10 +17,9 @@ _ag_cam_tools_cameras_address() {
     compadd -a addrs
 }
 
-_ag_cam_tools_calib_sessions() {
+_ag_cam_tools_calib_local_sessions() {
     local -a sessions
-    sessions=(device://)
-    sessions+=(${(f)"$(find . calibration -maxdepth 2 -type d -name 'calibration_*' 2>/dev/null | \
+    sessions=(${(f)"$(find . calibration -maxdepth 2 -type d -name 'calibration_*' 2>/dev/null | \
                while read -r d; do [ -d "$d/calib_result" ] && echo "$d"; done)"})
     compadd -a sessions
 }
@@ -53,6 +52,8 @@ _ag_cam_tools_capture() {
         '(-e --encode)'{-e,--encode}'=[output format]:format:(pgm png jpg)' \
         '(-x --exposure)'{-x,--exposure}'=[exposure time in microseconds]:microseconds:' \
         '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
+        '(--calibration-slot)--calibration-local=[calibration session folder]:session:_ag_cam_tools_calib_local_sessions' \
+        '(--calibration-local)--calibration-slot=[on-camera calibration slot]:slot:(0 1 2)' \
         '(-v --verbose)'{-v,--verbose}'[print diagnostic readback]' \
         '(-h --help)'{-h,--help}'[print this help]'
 }
@@ -70,7 +71,8 @@ _ag_cam_tools_stream() {
         '(-A --auto-expose)'{-A,--auto-expose}'[auto-expose then lock]' \
         '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
         '(-p --packet-size)'{-p,--packet-size}'=[GigE packet size]:bytes:' \
-        '(-r --rectify)'{-r,--rectify}'=[rectify using calibration session]:session:_ag_cam_tools_calib_sessions' \
+        '(--calibration-slot)--calibration-local=[calibration session folder]:session:_ag_cam_tools_calib_local_sessions' \
+        '(--calibration-local)--calibration-slot=[on-camera calibration slot]:slot:(0 1 2)' \
         '(-t --tag-size)'{-t,--tag-size}'=[AprilTag size in meters]:meters:' \
         '(-h --help)'{-h,--help}'[print this help]'
 }
@@ -122,7 +124,8 @@ _ag_cam_tools_depth_preview() {
         '(-A --auto-expose)'{-A,--auto-expose}'[auto-expose then lock]' \
         '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
         '(-p --packet-size)'{-p,--packet-size}'=[GigE packet size]:bytes:' \
-        '(-r --rectify)'{-r,--rectify}'=[calibration session folder]:session:_ag_cam_tools_calib_sessions' \
+        '(--calibration-slot)--calibration-local=[calibration session folder]:session:_ag_cam_tools_calib_local_sessions' \
+        '(--calibration-local)--calibration-slot=[on-camera calibration slot]:slot:(0 1 2)' \
         '--stereo-backend=[stereo disparity backend]:backend:(sgbm onnx igev rt-igev foundation)' \
         '--model-path=[path to ONNX model file]:file:_files' \
         '--min-disparity=[override calibration min_disparity]:disparity:' \

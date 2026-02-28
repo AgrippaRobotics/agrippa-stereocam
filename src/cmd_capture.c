@@ -6,6 +6,7 @@
  */
 
 #include "common.h"
+#include "calib_load.h"
 #include "image.h"
 #include "../vendor/argtable3.h"
 
@@ -20,7 +21,8 @@ capture_one_frame (const char *device_id, const char *output_dir,
                    const char *iface_ip, AgEncFormat enc,
                    double exposure_us, double gain_db,
                    gboolean auto_expose, int packet_size, int binning,
-                   gboolean verbose)
+                   gboolean verbose,
+                   const AgCalibSource *calib_src)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -44,6 +46,40 @@ capture_one_frame (const char *device_id, const char *output_dir,
     }
 
     ArvDevice *device = arv_camera_get_device (camera);
+
+    /* Load rectification remap tables if calibration was requested. */
+    AgRemapTable *remap_left  = NULL;
+    AgRemapTable *remap_right = NULL;
+
+    if (calib_src->local_path || calib_src->slot >= 0) {
+        if (ag_calib_load (device, calib_src,
+                            &remap_left, &remap_right, NULL) != 0) {
+            g_object_unref (cfg.stream);
+            g_object_unref (camera);
+            arv_shutdown ();
+            return EXIT_FAILURE;
+        }
+
+        /* Validate remap dimensions against processed frame size. */
+        guint proc_sub_w = (cfg.frame_w / 2) / (guint) cfg.software_binning;
+        guint proc_h     = cfg.frame_h / (guint) cfg.software_binning;
+        if (remap_left->width != proc_sub_w ||
+            remap_left->height != proc_h) {
+            fprintf (stderr,
+                     "error: remap dimensions %ux%u do not match frame %ux%u\n",
+                     remap_left->width, remap_left->height,
+                     proc_sub_w, proc_h);
+            ag_remap_table_free (remap_left);
+            ag_remap_table_free (remap_right);
+            g_object_unref (cfg.stream);
+            g_object_unref (camera);
+            arv_shutdown ();
+            return EXIT_FAILURE;
+        }
+
+        printf ("Rectification maps loaded (%ux%u).\n",
+                remap_left->width, remap_left->height);
+    }
 
     printf ("Starting acquisition...\n");
     arv_camera_start_acquisition (camera, &error);
@@ -198,7 +234,8 @@ capture_one_frame (const char *device_id, const char *output_dir,
         if (pixel_format && strcmp (pixel_format, "DualBayerRG8") == 0) {
             rc = write_dual_bayer_pair (output_dir, base, data, width, height,
                                         enc, cfg.software_binning,
-                                        cfg.data_is_bayer);
+                                        cfg.data_is_bayer,
+                                        remap_left, remap_right);
         } else {
             const char *ext = (enc == AG_ENC_PNG) ? "png"
                             : (enc == AG_ENC_JPG) ? "jpg" : "pgm";
@@ -215,6 +252,8 @@ capture_one_frame (const char *device_id, const char *output_dir,
 
     arv_stream_push_buffer (cfg.stream, buffer);
     arv_camera_stop_acquisition (camera, NULL);
+    ag_remap_table_free (remap_left);
+    ag_remap_table_free (remap_right);
     g_object_unref (cfg.stream);
     g_object_unref (camera);
     arv_shutdown ();
@@ -247,12 +286,17 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "sensor binning factor (default: 1)");
     struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
                                           "GigE packet size (default: auto-negotiate)");
+    struct arg_str *calib_local = arg_str0 (NULL, "calibration-local", "<path>",
+                                            "rectify using local calibration session");
+    struct arg_int *calib_slot  = arg_int0 (NULL, "calibration-slot", "<0-2>",
+                                            "rectify using on-camera calibration slot");
     struct arg_lit *verbose   = arg_lit0 ("v", "verbose",
                                           "print diagnostic readback");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
     void *argtable[] = { cmd, serial, address, interface, output, encode,
                          exposure, gain, auto_exp, binning_a, pkt_size,
+                         calib_local, calib_slot,
                          verbose, help, end };
 
     int exitcode = EXIT_SUCCESS;
@@ -313,6 +357,35 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
         goto done;
     }
 
+    /* Validate calibration args (mutually exclusive). */
+    if (calib_local->count && calib_slot->count) {
+        arg_dstr_catf (res, "error: --calibration-local and --calibration-slot "
+                       "are mutually exclusive\n");
+        exitcode = EXIT_FAILURE;
+        goto done;
+    }
+    if (calib_slot->count) {
+        int s = calib_slot->ival[0];
+        if (s < 0 || s > 2) {
+            arg_dstr_catf (res, "error: --calibration-slot must be 0, 1, or 2\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+    }
+
+    AgCalibSource calib_src = { .local_path = NULL, .slot = -1 };
+    if (calib_local->count)
+        calib_src.local_path = calib_local->sval[0];
+    else if (calib_slot->count)
+        calib_src.slot = calib_slot->ival[0];
+
+    if (calib_src.local_path)
+        printf ("Rectification enabled (calibration from %s).\n",
+                calib_src.local_path);
+    else if (calib_src.slot >= 0)
+        printf ("Rectification enabled (calibration from camera slot %d).\n",
+                calib_src.slot);
+
     /* Validate encode format. */
     AgEncFormat enc = AG_ENC_PGM;
     if (encode->count) {
@@ -349,7 +422,8 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
 
     exitcode = capture_one_frame (device_id, opt_output, iface_ip, enc,
                                    exposure_us, gain_db, do_auto_expose,
-                                   pkt_sz, binning, verbose->count > 0);
+                                   pkt_sz, binning, verbose->count > 0,
+                                   &calib_src);
     g_free (device_id);
 
 done:

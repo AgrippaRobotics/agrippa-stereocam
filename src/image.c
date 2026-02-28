@@ -118,6 +118,28 @@ write_gray_image (AgEncFormat enc, const char *path,
     return EXIT_SUCCESS;
 }
 
+/*
+ * Write a single rectified image (RGB24 data already gamma-corrected,
+ * debayered, and remapped).
+ */
+static int
+write_rgb_image_raw (AgEncFormat enc, const char *path,
+                     const guint8 *rgb, guint width, guint height)
+{
+    int ok;
+    if (enc == AG_ENC_PNG)
+        ok = stbi_write_png (path, (int) width, (int) height, 3, rgb,
+                             (int) width * 3);
+    else
+        ok = stbi_write_jpg (path, (int) width, (int) height, 3, rgb, 90);
+
+    if (!ok) {
+        fprintf (stderr, "error: failed to write '%s'\n", path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
 int
 write_dual_bayer_pair (const char *output_dir,
                        const char *basename_no_ext,
@@ -125,7 +147,9 @@ write_dual_bayer_pair (const char *output_dir,
                        guint width, guint height,
                        AgEncFormat enc,
                        int software_binning,
-                       gboolean data_is_bayer)
+                       gboolean data_is_bayer,
+                       const AgRemapTable *remap_left,
+                       const AgRemapTable *remap_right)
 {
     if (width % 2 != 0) {
         fprintf (stderr, "error: DualBayer frame width must be even, got %u\n",
@@ -181,7 +205,71 @@ write_dual_bayer_pair (const char *output_dir,
     char *right_path = g_build_filename (output_dir, right_name, NULL);
 
     int rc_left, rc_right;
-    if (enc == AG_ENC_PGM) {
+
+    if (remap_left && remap_right) {
+        /* Rectified path: gamma -> debayer/expand -> remap -> encode. */
+        size_t eye_n = (size_t) dst_w * (size_t) dst_h;
+
+        apply_lut_inplace (left,  eye_n, gamma_lut_2p5 ());
+        apply_lut_inplace (right, eye_n, gamma_lut_2p5 ());
+
+        if (enc == AG_ENC_PGM) {
+            /* PGM: remap grayscale, then write. */
+            guint8 *rect_l = g_malloc (eye_n);
+            guint8 *rect_r = g_malloc (eye_n);
+
+            if (data_is_bayer) {
+                /* Debayer to RGB, convert to gray, then remap gray. */
+                guint8 *rgb_tmp = g_malloc (eye_n * 3);
+                guint8 *gray_l  = g_malloc (eye_n);
+                guint8 *gray_r  = g_malloc (eye_n);
+
+                debayer_rg8_to_rgb (left,  rgb_tmp, dst_w, dst_h);
+                rgb_to_gray (rgb_tmp, gray_l, (uint32_t) eye_n);
+                debayer_rg8_to_rgb (right, rgb_tmp, dst_w, dst_h);
+                rgb_to_gray (rgb_tmp, gray_r, (uint32_t) eye_n);
+                g_free (rgb_tmp);
+
+                ag_remap_gray (remap_left,  gray_l, rect_l);
+                ag_remap_gray (remap_right, gray_r, rect_r);
+                g_free (gray_l);
+                g_free (gray_r);
+            } else {
+                ag_remap_gray (remap_left,  left,  rect_l);
+                ag_remap_gray (remap_right, right, rect_r);
+            }
+
+            rc_left  = write_pgm (left_path,  rect_l, dst_w, dst_h);
+            rc_right = write_pgm (right_path, rect_r, dst_w, dst_h);
+            g_free (rect_l);
+            g_free (rect_r);
+        } else {
+            /* PNG/JPG: debayer/expand to RGB, remap RGB, encode. */
+            guint8 *rgb_l = g_malloc (eye_n * 3);
+            guint8 *rgb_r = g_malloc (eye_n * 3);
+            guint8 *rect_l = g_malloc (eye_n * 3);
+            guint8 *rect_r = g_malloc (eye_n * 3);
+
+            if (data_is_bayer) {
+                debayer_rg8_to_rgb (left,  rgb_l, dst_w, dst_h);
+                debayer_rg8_to_rgb (right, rgb_r, dst_w, dst_h);
+            } else {
+                gray_to_rgb_replicate (left,  rgb_l, (uint32_t) eye_n);
+                gray_to_rgb_replicate (right, rgb_r, (uint32_t) eye_n);
+            }
+
+            ag_remap_rgb (remap_left,  rgb_l, rect_l);
+            ag_remap_rgb (remap_right, rgb_r, rect_r);
+
+            rc_left  = write_rgb_image_raw (enc, left_path,  rect_l, dst_w, dst_h);
+            rc_right = write_rgb_image_raw (enc, right_path, rect_r, dst_w, dst_h);
+
+            g_free (rgb_l);
+            g_free (rgb_r);
+            g_free (rect_l);
+            g_free (rect_r);
+        }
+    } else if (enc == AG_ENC_PGM) {
         rc_left  = write_pgm (left_path,  left,  dst_w, dst_h);
         rc_right = write_pgm (right_path, right, dst_w, dst_h);
     } else if (!data_is_bayer) {
@@ -192,7 +280,8 @@ write_dual_bayer_pair (const char *output_dir,
         rc_right = write_color_image (enc, right_path, right, dst_w, dst_h);
     }
 
-    const char *kind = data_is_bayer ? "BayerRG8" : "gray";
+    const char *kind = remap_left ? "rectified"
+                     : data_is_bayer ? "BayerRG8" : "gray";
     if (rc_left == EXIT_SUCCESS && rc_right == EXIT_SUCCESS) {
         printf ("Saved: %s  (%ux%u, %s left)\n",  left_path,  dst_w, dst_h, kind);
         printf ("Saved: %s  (%ux%u, %s right)\n", right_path, dst_w, dst_h, kind);
