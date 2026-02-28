@@ -8,6 +8,7 @@
 
 #include "common.h"
 #include "calib_load.h"
+#include "confidence.h"
 #include "disparity_filter.h"
 #include "temporal_filter.h"
 #include "font.h"
@@ -139,6 +140,9 @@ typedef struct {
 
     /* Temporal median filter (#10). */
     int      temporal_frames;      /* 0=off, 3-9 recommended */
+
+    /* Confidence map (#14). */
+    gboolean confidence_map;       /* show confidence overlay instead of disparity */
 } AgPostProcOpts;
 
 /* ------------------------------------------------------------------ */
@@ -315,6 +319,11 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     int16_t *disparity_rl = NULL;
     if (postproc->wls_filter)
         disparity_rl = g_malloc (eye_pixels * sizeof (int16_t));
+
+    /* Confidence map buffer (only needed for --confidence-map). */
+    uint8_t *confidence_buf = NULL;
+    if (postproc->confidence_map)
+        confidence_buf = g_malloc (eye_pixels);
 
     /* Start acquisition. */
     printf ("Starting acquisition at %.1f Hz...\n", fps);
@@ -664,10 +673,18 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
             }
         }
 
-        ag_disparity_colorize (disparity_buf, proc_sub_w, proc_h,
-                               sgbm_params->min_disparity,
-                               sgbm_params->num_disparities,
-                               disparity_rgb);
+        /* ---- Colorize disparity (or confidence overlay) ---- */
+        if (disp_ok == 0 && postproc->confidence_map && confidence_buf) {
+            ag_confidence_compute (disparity_buf, rect_gray_l,
+                                    proc_sub_w, proc_h, confidence_buf);
+            ag_confidence_colorize (confidence_buf, proc_sub_w, proc_h,
+                                    disparity_rgb);
+        } else {
+            ag_disparity_colorize (disparity_buf, proc_sub_w, proc_h,
+                                   sgbm_params->min_disparity,
+                                   sgbm_params->num_disparities,
+                                   disparity_rgb);
+        }
 
         /* ---- Display path (with gamma for natural look) ---- */
         apply_lut_inplace (bayer_left,  eye_pixels, gamma_lut);
@@ -765,6 +782,7 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
 
 cleanup_sdl:
     ag_temporal_filter_destroy (temporal_ctx);
+    g_free (confidence_buf);
     g_free (disparity_rl);
     g_free (disparity_rgb);
     g_free (disparity_scratch);
@@ -863,6 +881,8 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                                             "WLS edge sensitivity (default: 1.5)");
     struct arg_int *temporal_a = arg_int0 (NULL, "temporal-filter", "<frames>",
                                             "temporal median filter depth (3-9, default: off)");
+    struct arg_lit *conf_map  = arg_lit0 (NULL, "confidence-map",
+                                           "show confidence overlay instead of disparity");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (20);
 
@@ -875,7 +895,7 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                          clahe_a, clahe_clip_a, clahe_tile_a,
                          mask_spec, spec_thresh, median_a, morph_a,
                          wls_a, wls_lam_a, wls_sig_a,
-                         temporal_a,
+                         temporal_a, conf_map,
                          help, end };
 
     int exitcode = EXIT_SUCCESS;
@@ -1097,6 +1117,7 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
     postproc.wls_lambda         = wls_lam_a->count ? wls_lam_a->dval[0] : 8000.0;
     postproc.wls_sigma          = wls_sig_a->count ? wls_sig_a->dval[0] : 1.5;
     postproc.temporal_frames    = temporal_a->count ? temporal_a->ival[0] : 0;
+    postproc.confidence_map     = conf_map->count > 0;
 
     exitcode = depth_preview_loop (device_id, iface_ip, fps,
                                     exposure_us, gain_db,
