@@ -28,6 +28,7 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/remap.c \
        $(SRCDIR)/stereo_common.c \
        $(SRCDIR)/disparity_filter.c \
+       $(SRCDIR)/temporal_filter.c \
        $(SRCDIR)/cmd_depth_preview.c \
        $(SRCDIR)/device_file.c \
        $(SRCDIR)/calib_archive.c \
@@ -215,13 +216,18 @@ $(BINDIR)/test_disparity_filter: $(TESTDIR)/test_disparity_filter.c $(BINDIR)/di
                                   $(UNITY_OBJ) | $(BINDIR)
 	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/disparity_filter.o $(UNITY_OBJ) $(TEST_LIBS)
 
+$(BINDIR)/test_temporal_filter: $(TESTDIR)/test_temporal_filter.c $(BINDIR)/temporal_filter.o \
+                                 $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/temporal_filter.o $(UNITY_OBJ) $(TEST_LIBS)
+
 $(BINDIR)/gen_test_calibration: $(TESTDIR)/gen_test_calibration.c | $(BINDIR)
 	$(CC) -Wall -O2 -o $@ $<
 
 test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning \
       $(BINDIR)/test_calib_load $(BINDIR)/test_focus $(BINDIR)/test_stereo_common \
       $(BINDIR)/test_imgproc_extra $(BINDIR)/test_image \
-      $(BINDIR)/test_calib_load_slot $(BINDIR)/test_disparity_filter
+      $(BINDIR)/test_calib_load_slot $(BINDIR)/test_disparity_filter \
+      $(BINDIR)/test_temporal_filter
 	@echo "=== Unit Tests ==="
 	$(BINDIR)/test_calib_archive
 	$(BINDIR)/test_remap
@@ -233,6 +239,7 @@ test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning \
 	$(BINDIR)/test_image
 	$(BINDIR)/test_calib_load_slot
 	$(BINDIR)/test_disparity_filter
+	$(BINDIR)/test_temporal_filter
 
 # ---- Hardware Integration Tests (camera required) ---------------------
 

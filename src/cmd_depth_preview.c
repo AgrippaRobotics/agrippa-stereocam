@@ -9,6 +9,7 @@
 #include "common.h"
 #include "calib_load.h"
 #include "disparity_filter.h"
+#include "temporal_filter.h"
 #include "font.h"
 #include "remap.h"
 #include "stereo.h"
@@ -135,6 +136,9 @@ typedef struct {
     gboolean wls_filter;
     double   wls_lambda;           /* regularization strength, default 8000.0 */
     double   wls_sigma;            /* edge sensitivity, default 1.5 */
+
+    /* Temporal median filter (#10). */
+    int      temporal_frames;      /* 0=off, 3-9 recommended */
 } AgPostProcOpts;
 
 /* ------------------------------------------------------------------ */
@@ -228,6 +232,18 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     if (enable_runtime_tuning && backend == AG_STEREO_SGBM) {
         print_sgbm_controls ();
         print_sgbm_params (sgbm_params);
+    }
+
+    /* Temporal median filter (optional). */
+    AgTemporalFilter *temporal_ctx = NULL;
+    if (postproc->temporal_frames >= 2) {
+        temporal_ctx = ag_temporal_filter_create (
+            proc_sub_w, proc_h, postproc->temporal_frames);
+        if (temporal_ctx)
+            printf ("Temporal median filter: %d frames\n",
+                    postproc->temporal_frames);
+        else
+            fprintf (stderr, "warn: failed to create temporal filter\n");
     }
 
     /* SDL2 setup. */
@@ -460,6 +476,9 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                     if (ag_disparity_update_sgbm_params (disp_ctx, &next) == 0) {
                         *sgbm_params = next;
                         print_sgbm_params (sgbm_params);
+                        /* Reset temporal filter — stale frames use old params. */
+                        if (temporal_ctx)
+                            ag_temporal_filter_reset (temporal_ctx);
                     } else {
                         fprintf (stderr, "warn: failed to apply SGBM params\n");
                     }
@@ -637,6 +656,12 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                 }
             }
 #endif
+
+            /* 5. Temporal median filter (multi-frame de-noising). */
+            if (temporal_ctx) {
+                ag_temporal_filter_push (temporal_ctx,
+                                         disparity_buf, disparity_buf);
+            }
         }
 
         ag_disparity_colorize (disparity_buf, proc_sub_w, proc_h,
@@ -739,6 +764,7 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     arv_camera_stop_acquisition (camera, NULL);
 
 cleanup_sdl:
+    ag_temporal_filter_destroy (temporal_ctx);
     g_free (disparity_rl);
     g_free (disparity_rgb);
     g_free (disparity_scratch);
@@ -835,6 +861,8 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                                             "WLS regularization strength (default: 8000.0)");
     struct arg_dbl *wls_sig_a = arg_dbl0 (NULL, "wls-sigma", "<value>",
                                             "WLS edge sensitivity (default: 1.5)");
+    struct arg_int *temporal_a = arg_int0 (NULL, "temporal-filter", "<frames>",
+                                            "temporal median filter depth (3-9, default: off)");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (20);
 
@@ -847,6 +875,7 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                          clahe_a, clahe_clip_a, clahe_tile_a,
                          mask_spec, spec_thresh, median_a, morph_a,
                          wls_a, wls_lam_a, wls_sig_a,
+                         temporal_a,
                          help, end };
 
     int exitcode = EXIT_SUCCESS;
@@ -1067,6 +1096,7 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
     postproc.wls_filter         = wls_a->count > 0;
     postproc.wls_lambda         = wls_lam_a->count ? wls_lam_a->dval[0] : 8000.0;
     postproc.wls_sigma          = wls_sig_a->count ? wls_sig_a->dval[0] : 1.5;
+    postproc.temporal_frames    = temporal_a->count ? temporal_a->ival[0] : 0;
 
     exitcode = depth_preview_loop (device_id, iface_ip, fps,
                                     exposure_us, gain_db,
