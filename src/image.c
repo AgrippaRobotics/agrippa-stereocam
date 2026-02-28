@@ -89,12 +89,43 @@ write_color_image (AgEncFormat enc, const char *path,
 }
 
 int
+write_gray_image (AgEncFormat enc, const char *path,
+                  const guint8 *gray, guint width, guint height)
+{
+    size_t n = (size_t) width * (size_t) height;
+    guint8 *gamma_gray = g_malloc (n);
+    if (!gamma_gray) {
+        fprintf (stderr, "error: out of memory for gamma buffer\n");
+        return EXIT_FAILURE;
+    }
+
+    memcpy (gamma_gray, gray, n);
+    apply_lut_inplace (gamma_gray, n, gamma_lut_2p5 ());
+
+    int ok;
+    if (enc == AG_ENC_PNG)
+        ok = stbi_write_png (path, (int) width, (int) height, 1, gamma_gray,
+                             (int) width);
+    else
+        ok = stbi_write_jpg (path, (int) width, (int) height, 1, gamma_gray, 90);
+
+    g_free (gamma_gray);
+
+    if (!ok) {
+        fprintf (stderr, "error: failed to write '%s'\n", path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+int
 write_dual_bayer_pair (const char *output_dir,
                        const char *basename_no_ext,
                        const guint8 *interleaved,
                        guint width, guint height,
                        AgEncFormat enc,
-                       int software_binning)
+                       int software_binning,
+                       gboolean data_is_bayer)
 {
     if (width % 2 != 0) {
         fprintf (stderr, "error: DualBayer frame width must be even, got %u\n",
@@ -153,14 +184,18 @@ write_dual_bayer_pair (const char *output_dir,
     if (enc == AG_ENC_PGM) {
         rc_left  = write_pgm (left_path,  left,  dst_w, dst_h);
         rc_right = write_pgm (right_path, right, dst_w, dst_h);
+    } else if (!data_is_bayer) {
+        rc_left  = write_gray_image (enc, left_path,  left,  dst_w, dst_h);
+        rc_right = write_gray_image (enc, right_path, right, dst_w, dst_h);
     } else {
         rc_left  = write_color_image (enc, left_path,  left,  dst_w, dst_h);
         rc_right = write_color_image (enc, right_path, right, dst_w, dst_h);
     }
 
+    const char *kind = data_is_bayer ? "BayerRG8" : "gray";
     if (rc_left == EXIT_SUCCESS && rc_right == EXIT_SUCCESS) {
-        printf ("Saved: %s  (%ux%u, BayerRG8 left)\n",  left_path,  dst_w, dst_h);
-        printf ("Saved: %s  (%ux%u, BayerRG8 right)\n", right_path, dst_w, dst_h);
+        printf ("Saved: %s  (%ux%u, %s left)\n",  left_path,  dst_w, dst_h, kind);
+        printf ("Saved: %s  (%ux%u, %s right)\n", right_path, dst_w, dst_h, kind);
     }
 
     g_free (left_name);

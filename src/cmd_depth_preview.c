@@ -634,10 +634,16 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
         }
 
         /* ---- Disparity path (pre-gamma for better matching) ---- */
-        debayer_rg8_to_rgb (bayer_left,  rgb_nogamma_l, proc_sub_w, proc_h);
-        debayer_rg8_to_rgb (bayer_right, rgb_nogamma_r, proc_sub_w, proc_h);
-        rgb_to_gray (rgb_nogamma_l, gray_left,  (uint32_t) eye_pixels);
-        rgb_to_gray (rgb_nogamma_r, gray_right, (uint32_t) eye_pixels);
+        if (cfg.data_is_bayer) {
+            debayer_rg8_to_rgb (bayer_left,  rgb_nogamma_l, proc_sub_w, proc_h);
+            debayer_rg8_to_rgb (bayer_right, rgb_nogamma_r, proc_sub_w, proc_h);
+            rgb_to_gray (rgb_nogamma_l, gray_left,  (uint32_t) eye_pixels);
+            rgb_to_gray (rgb_nogamma_r, gray_right, (uint32_t) eye_pixels);
+        } else {
+            /* Binned data is already grayscale-like — use directly. */
+            memcpy (gray_left,  bayer_left,  eye_pixels);
+            memcpy (gray_right, bayer_right, eye_pixels);
+        }
         ag_remap_gray (remap_left,  gray_left,  rect_gray_l);
         ag_remap_gray (remap_right, gray_right, rect_gray_r);
 
@@ -652,7 +658,10 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
 
         /* ---- Display path (with gamma for natural look) ---- */
         apply_lut_inplace (bayer_left,  eye_pixels, gamma_lut);
-        debayer_rg8_to_rgb (bayer_left, rgb_left, proc_sub_w, proc_h);
+        if (cfg.data_is_bayer)
+            debayer_rg8_to_rgb (bayer_left, rgb_left, proc_sub_w, proc_h);
+        else
+            gray_to_rgb_replicate (bayer_left, rgb_left, (uint32_t) eye_pixels);
         ag_remap_rgb (remap_left, rgb_left, rect_rgb_l);
 
         /* Upload to SDL texture: [rectified left | disparity colourmap]. */

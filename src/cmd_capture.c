@@ -197,7 +197,8 @@ capture_one_frame (const char *device_id, const char *output_dir,
                                        device, "PixelFormat", NULL);
         if (pixel_format && strcmp (pixel_format, "DualBayerRG8") == 0) {
             rc = write_dual_bayer_pair (output_dir, base, data, width, height,
-                                        enc, cfg.software_binning);
+                                        enc, cfg.software_binning,
+                                        cfg.data_is_bayer);
         } else {
             const char *ext = (enc == AG_ENC_PNG) ? "png"
                             : (enc == AG_ENC_JPG) ? "jpg" : "pgm";

@@ -20,15 +20,23 @@ int write_pgm (const char *path, const guint8 *data, guint width, guint height);
 int write_color_image (AgEncFormat enc, const char *path,
                        const guint8 *bayer, guint width, guint height);
 
+/* Gamma-correct + encode single-channel data as grayscale PNG/JPEG. */
+int write_gray_image (AgEncFormat enc, const char *path,
+                      const guint8 *gray, guint width, guint height);
+
 /*
  * Full DualBayer pipeline: deinterleave, optional software binning,
  * gamma-correct, debayer, encode left+right images.
+ *
+ * When data_is_bayer is FALSE (binned data), PNG/JPEG output is saved
+ * as grayscale instead of incorrectly debayering.
  */
 int write_dual_bayer_pair (const char *output_dir,
                            const char *basename_no_ext,
                            const guint8 *interleaved,
                            guint width, guint height,
                            AgEncFormat enc,
-                           int software_binning);
+                           int software_binning,
+                           gboolean data_is_bayer);
 
 #endif /* AG_IMAGE_H */

@@ -15,6 +15,7 @@ TARGET = $(BINDIR)/ag-cam-tools
 
 SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/common.c \
+       $(SRCDIR)/imgproc.c \
        $(SRCDIR)/image.c \
        $(SRCDIR)/focus.c \
        $(SRCDIR)/focus_audio.c \
@@ -163,19 +164,24 @@ $(BINDIR)/test_calib_archive: $(TESTDIR)/test_calib_archive.c $(TEST_OBJS) | $(B
 $(BINDIR)/test_remap: $(TESTDIR)/test_remap.c $(BINDIR)/remap.o | $(BINDIR)
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(BINDIR)/remap.o $(TEST_LIBS)
 
+$(BINDIR)/test_binning: $(TESTDIR)/test_binning.c $(BINDIR)/imgproc.o | $(BINDIR)
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(BINDIR)/imgproc.o $(TEST_LIBS)
+
 $(BINDIR)/gen_test_calibration: $(TESTDIR)/gen_test_calibration.c | $(BINDIR)
 	$(CC) -Wall -O2 -o $@ $<
 
-test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap
+test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning
 	@echo "=== Unit Tests ==="
 	$(BINDIR)/test_calib_archive
 	$(BINDIR)/test_remap
+	$(BINDIR)/test_binning
 
 # ---- Hardware Integration Tests (camera required) ---------------------
 
 test-hw: $(TARGET) $(BINDIR)/gen_test_calibration
 	@echo "=== Hardware Integration Tests ==="
 	$(TESTDIR)/test_stash_hw.sh
+	$(TESTDIR)/test_binning_hw.sh
 
 test-all: test test-hw
 

@@ -373,10 +373,18 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
             char *left_path  = g_build_filename (left_dir,  left_name,  NULL);
             char *right_path = g_build_filename (right_dir, right_name, NULL);
 
-            int rc_left  = write_color_image (AG_ENC_PNG, left_path,
+            int rc_left, rc_right;
+            if (cfg.data_is_bayer) {
+                rc_left  = write_color_image (AG_ENC_PNG, left_path,
                                               bayer_left,  proc_sub_w, proc_h);
-            int rc_right = write_color_image (AG_ENC_PNG, right_path,
+                rc_right = write_color_image (AG_ENC_PNG, right_path,
                                               bayer_right, proc_sub_w, proc_h);
+            } else {
+                rc_left  = write_gray_image (AG_ENC_PNG, left_path,
+                                             bayer_left,  proc_sub_w, proc_h);
+                rc_right = write_gray_image (AG_ENC_PNG, right_path,
+                                             bayer_right, proc_sub_w, proc_h);
+            }
 
             if (rc_left == EXIT_SUCCESS && rc_right == EXIT_SUCCESS) {
                 saved_count++;
@@ -407,8 +415,13 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
         size_t eye_n = (size_t) proc_sub_w * (size_t) proc_h;
         apply_lut_inplace (bayer_left,  eye_n, gamma_lut);
         apply_lut_inplace (bayer_right, eye_n, gamma_lut);
-        debayer_rg8_to_rgb (bayer_left,  rgb_left,  proc_sub_w, proc_h);
-        debayer_rg8_to_rgb (bayer_right, rgb_right, proc_sub_w, proc_h);
+        if (cfg.data_is_bayer) {
+            debayer_rg8_to_rgb (bayer_left,  rgb_left,  proc_sub_w, proc_h);
+            debayer_rg8_to_rgb (bayer_right, rgb_right, proc_sub_w, proc_h);
+        } else {
+            gray_to_rgb_replicate (bayer_left,  rgb_left,  (uint32_t) eye_n);
+            gray_to_rgb_replicate (bayer_right, rgb_right, (uint32_t) eye_n);
+        }
 
         /* Upload to SDL texture. */
         void *tex_pixels;

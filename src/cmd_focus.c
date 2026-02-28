@@ -332,8 +332,13 @@ focus_loop (const char *device_id, const char *iface_ip,
         apply_lut_inplace (bayer_left,  eye_n, gamma_lut);
         apply_lut_inplace (bayer_right, eye_n, gamma_lut);
 
-        debayer_rg8_to_rgb (bayer_left,  rgb_left,  proc_sub_w, proc_h);
-        debayer_rg8_to_rgb (bayer_right, rgb_right, proc_sub_w, proc_h);
+        if (cfg.data_is_bayer) {
+            debayer_rg8_to_rgb (bayer_left,  rgb_left,  proc_sub_w, proc_h);
+            debayer_rg8_to_rgb (bayer_right, rgb_right, proc_sub_w, proc_h);
+        } else {
+            gray_to_rgb_replicate (bayer_left,  rgb_left,  (uint32_t) eye_n);
+            gray_to_rgb_replicate (bayer_right, rgb_right, (uint32_t) eye_n);
+        }
 
         /* Upload to SDL texture. */
         void *tex_pixels;

@@ -369,6 +369,12 @@ Sensor binning combines photosite charge on the silicon before readout, so the e
 
 Average mode preserves radiometric linearity and keeps pixel values in the same 0-255 range as full-resolution captures.
 
+### Bayer CFA and Binning
+
+The PDH016S uses a BayerRG8 colour filter array.  Each 2x2 Bayer quad contains one R, two G, and one B photosite.  When **2x2 Average** binning is applied (hardware or software), it averages across heterogeneous colour channels—`(R+G+G+B)/4`—destroying the CFA mosaic.  The resulting data is a luminance-like monochrome signal, not a valid Bayer pattern.
+
+`ag-cam-tools` detects this automatically: `camera_configure()` reads back the `IspBayerPattern` GenICam node after binning.  If the camera reports `None`, all downstream paths (stream, capture, depth-preview, focus, calibration-capture) treat the data as grayscale, skipping debayer and writing single-channel PNG/PGM output.  If the ISP reports a valid pattern (e.g. a future firmware mode that preserves CFA), colour debayering is re-enabled.
+
 ### Effect on stereo geometry
 
 Binning changes the effective pixel size used in depth computation:
