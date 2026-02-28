@@ -17,6 +17,7 @@ int cmd_focus   (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_calibration_capture (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_depth_preview_classical (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_depth_preview_neural (int argc, char *argv[], arg_dstr_t res, void *ctx);
+int cmd_calibration_stash (int argc, char *argv[], arg_dstr_t res, void *ctx);
 
 static void
 print_usage (void)
@@ -38,6 +39,8 @@ print_usage (void)
             "            Live depth map with classical backend controls\n"
             "  depth-preview-neural\n"
             "            Live depth map with neural backend controls\n"
+            "  calibration-stash\n"
+            "            Upload/list/delete calibration data on camera\n"
             "\n"
             "Run 'ag-cam-tools <command> --help' for command-specific options.\n");
 }
@@ -65,6 +68,8 @@ main (int argc, char *argv[])
                       "Live depth map with classical backend controls", NULL);
     arg_cmd_register ("depth-preview-neural", cmd_depth_preview_neural,
                       "Live depth map with neural backend controls", NULL);
+    arg_cmd_register ("calibration-stash", cmd_calibration_stash,
+                      "Upload/list/delete calibration data on camera", NULL);
 
     if (argc < 2 ||
         strcmp (argv[1], "--help") == 0 ||

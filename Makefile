@@ -5,7 +5,7 @@ CFLAGS  = -Wall -Wextra -O2 \
           $(shell pkg-config --cflags sdl2)
 LIBS    = $(shell pkg-config --libs aravis-0.8) \
           $(shell pkg-config --libs sdl2) \
-          -lm
+          -lz -lm
 
 SRCDIR    = src
 BINDIR    = bin
@@ -26,7 +26,10 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/cmd_calibration_capture.c \
        $(SRCDIR)/remap.c \
        $(SRCDIR)/stereo_common.c \
-       $(SRCDIR)/cmd_depth_preview.c
+       $(SRCDIR)/cmd_depth_preview.c \
+       $(SRCDIR)/device_file.c \
+       $(SRCDIR)/calib_archive.c \
+       $(SRCDIR)/cmd_calibration_stash.c
 
 VENDOR_SRCS = $(VENDORDIR)/argtable3.c \
               $(VENDORDIR)/cJSON.c
@@ -94,7 +97,7 @@ PREFIX     ?= /usr/local
 BASHCOMPDIR ?= $(PREFIX)/share/bash-completion/completions
 ZSHCOMPDIR  ?= $(PREFIX)/share/zsh/site-functions
 
-.PHONY: all clean install uninstall
+.PHONY: all clean install uninstall test test-hw test-all
 
 all: $(BINDIR) $(TARGET)
 
@@ -139,6 +142,42 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/ag-cam-tools
 	rm -f $(DESTDIR)$(BASHCOMPDIR)/ag-cam-tools
 	rm -f $(DESTDIR)$(ZSHCOMPDIR)/_ag-cam-tools
+
+# ---- Unit Tests (no hardware required) --------------------------------
+
+TESTDIR = tests
+
+# Compilation flags for tests: need aravis headers (common.h includes
+# <arv.h>) but unit tests only link against glib + zlib — no aravis libs.
+TEST_CFLAGS = -Wall -Wextra -O2 -g \
+              $(shell pkg-config --cflags aravis-0.8) \
+              -I$(SRCDIR) -I$(VENDORDIR)
+TEST_LIBS   = $(shell pkg-config --libs glib-2.0) -lz -lm
+
+# Object files needed by unit tests (no main.o, no cmd_*.o).
+TEST_OBJS = $(BINDIR)/remap.o $(BINDIR)/calib_archive.o $(BINDIR)/cJSON.o
+
+$(BINDIR)/test_calib_archive: $(TESTDIR)/test_calib_archive.c $(TEST_OBJS) | $(BINDIR)
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(TEST_OBJS) $(TEST_LIBS)
+
+$(BINDIR)/test_remap: $(TESTDIR)/test_remap.c $(BINDIR)/remap.o | $(BINDIR)
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(BINDIR)/remap.o $(TEST_LIBS)
+
+$(BINDIR)/gen_test_calibration: $(TESTDIR)/gen_test_calibration.c | $(BINDIR)
+	$(CC) -Wall -O2 -o $@ $<
+
+test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap
+	@echo "=== Unit Tests ==="
+	$(BINDIR)/test_calib_archive
+	$(BINDIR)/test_remap
+
+# ---- Hardware Integration Tests (camera required) ---------------------
+
+test-hw: $(TARGET) $(BINDIR)/gen_test_calibration
+	@echo "=== Hardware Integration Tests ==="
+	$(TESTDIR)/test_stash_hw.sh
+
+test-all: test test-hw
 
 clean:
 	rm -rf $(BINDIR)

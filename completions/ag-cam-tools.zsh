@@ -19,7 +19,8 @@ _ag_cam_tools_cameras_address() {
 
 _ag_cam_tools_calib_sessions() {
     local -a sessions
-    sessions=(${(f)"$(find . calibration -maxdepth 2 -type d -name 'calibration_*' 2>/dev/null | \
+    sessions=(device://)
+    sessions+=(${(f)"$(find . calibration -maxdepth 2 -type d -name 'calibration_*' 2>/dev/null | \
                while read -r d; do [ -d "$d/calib_result" ] && echo "$d"; done)"})
     compadd -a sessions
 }
@@ -130,6 +131,32 @@ _ag_cam_tools_depth_preview() {
         '(-h --help)'{-h,--help}'[print this help]'
 }
 
+_ag_cam_tools_calibration_stash() {
+    local -a actions
+    actions=(
+        'list:Show storage info and archive contents'
+        'upload:Pack a calibration session and write it to a slot'
+        'download:Download a calibration slot to a local directory'
+        'delete:Remove a calibration slot from the camera'
+        'purge:Delete the entire calibration file from the camera'
+    )
+
+    if (( CURRENT == 3 )); then
+        _describe 'action' actions
+    else
+        _arguments \
+            '(-a --address)-s[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+            '(-a --address)--serial=[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+            '(-s --serial)-a[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+            '(-s --serial)--address=[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+            '(-i --interface)'{-i,--interface}'=[force NIC selection]:interface:_net_interfaces' \
+            '--slot=[calibration slot]:slot:(0 1 2)' \
+            '(-o --output)'{-o,--output}'=[output directory (for download)]:directory:_directories' \
+            '(-h --help)'{-h,--help}'[print this help]' \
+            '*:session path:_directories'
+    fi
+}
+
 _ag_cam_tools() {
     local -a subcmds
     subcmds=(
@@ -141,6 +168,7 @@ _ag_cam_tools() {
         'calibration-capture:Interactive stereo pair capture for calibration'
         'depth-preview-classical:Live depth map with classical backend controls'
         'depth-preview-neural:Live depth map with neural backend controls'
+        'calibration-stash:Upload/list/delete calibration data on camera'
     )
 
     if (( CURRENT == 2 )); then
@@ -155,6 +183,7 @@ _ag_cam_tools() {
             calibration-capture) _ag_cam_tools_calibration_capture ;;
             depth-preview-classical) _ag_cam_tools_depth_preview ;;
             depth-preview-neural) _ag_cam_tools_depth_preview ;;
+            calibration-stash) _ag_cam_tools_calibration_stash ;;
         esac
     fi
 }

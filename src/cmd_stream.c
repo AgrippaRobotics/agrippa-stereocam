@@ -7,6 +7,8 @@
  */
 
 #include "common.h"
+#include "calib_archive.h"
+#include "device_file.h"
 #include "remap.h"
 #include "../vendor/argtable3.h"
 
@@ -247,7 +249,59 @@ stream_loop (const char *device_id, const char *iface_ip,
     guint8 *rect_left  = NULL;
     guint8 *rect_right = NULL;
 
-    if (rectify_path) {
+    if (rectify_path &&
+        strncmp (rectify_path, "device://", 9) == 0) {
+        /* Load calibration archive from camera file storage.
+         * "device://" = slot 0, "device://2" = slot 2, etc. */
+        int calib_slot = 0;
+        if (rectify_path[9] != '\0')
+            calib_slot = atoi (rectify_path + 9);
+
+        uint8_t *archive_data = NULL;
+        size_t   archive_len  = 0;
+
+        printf ("Reading calibration from camera (slot %d)...\n", calib_slot);
+        if (ag_device_file_read (device, "UserFile1",
+                                  &archive_data, &archive_len) != 0) {
+            fprintf (stderr, "error: failed to read calibration from camera\n");
+            goto cleanup;
+        }
+
+        /* Extract the requested slot (handles AGMS and legacy AGST). */
+        const uint8_t *slot_data = NULL;
+        size_t         slot_len  = 0;
+        if (ag_multislot_extract_slot (archive_data, archive_len,
+                                        calib_slot,
+                                        &slot_data, &slot_len) != 0) {
+            fprintf (stderr, "error: calibration slot %d not found\n",
+                     calib_slot);
+            g_free (archive_data);
+            goto cleanup;
+        }
+
+        AgCalibMeta meta_unused = {0};
+        if (ag_calib_archive_unpack (slot_data, slot_len,
+                                      &remap_left, &remap_right,
+                                      &meta_unused) != 0) {
+            fprintf (stderr, "error: failed to unpack calibration archive\n");
+            g_free (archive_data);
+            goto cleanup;
+        }
+        g_free (archive_data);
+
+        if (remap_left->width != proc_sub_w || remap_left->height != proc_h) {
+            fprintf (stderr,
+                     "error: remap dimensions %ux%u do not match frame %ux%u\n",
+                     remap_left->width, remap_left->height,
+                     proc_sub_w, proc_h);
+            goto cleanup;
+        }
+
+        rect_left  = g_malloc ((size_t) proc_sub_w * proc_h * 3);
+        rect_right = g_malloc ((size_t) proc_sub_w * proc_h * 3);
+        printf ("Rectification enabled from device (%ux%u maps loaded).\n",
+                proc_sub_w, proc_h);
+    } else if (rectify_path) {
         char *lpath = g_build_filename (rectify_path, "calib_result",
                                         "remap_left.bin", NULL);
         char *rpath = g_build_filename (rectify_path, "calib_result",
@@ -548,8 +602,8 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "sensor binning factor (default: 1)");
     struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
                                           "GigE packet size (default: auto-negotiate)");
-    struct arg_str *rectify   = arg_str0 ("r", "rectify",  "<session>",
-                                          "rectify using calibration session folder");
+    struct arg_str *rectify   = arg_str0 ("r", "rectify",  "<session|device://[slot]>",
+                                          "rectify using session folder or device://[0-2]");
 #ifdef HAVE_APRILTAG
     struct arg_dbl *tag_size  = arg_dbl0 ("t", "tag-size",  "<meters>",
                                           "AprilTag size in meters (enables detection)");

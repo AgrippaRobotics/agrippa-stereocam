@@ -7,6 +7,8 @@
  */
 
 #include "common.h"
+#include "calib_archive.h"
+#include "device_file.h"
 #include "font.h"
 #include "remap.h"
 #include "stereo.h"
@@ -33,15 +35,8 @@ sigint_handler (int sig)
 /*  Calibration metadata loader                                        */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    int    min_disparity;
-    int    num_disparities;
-    double focal_length_px;
-    double baseline_cm;
-} CalibMeta;
-
 static int
-load_calibration_meta (const char *session_path, CalibMeta *out)
+load_calibration_meta (const char *session_path, AgCalibMeta *out)
 {
     char *json_path = g_build_filename (session_path, "calib_result",
                                          "calibration_meta.json", NULL);
@@ -207,27 +202,88 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     guint display_h  = proc_h;
 
     /* Load remap tables (required for depth). */
-    char *lpath = g_build_filename (rectify_path, "calib_result",
-                                     "remap_left.bin", NULL);
-    char *rpath = g_build_filename (rectify_path, "calib_result",
-                                     "remap_right.bin", NULL);
-    AgRemapTable *remap_left  = ag_remap_table_load (lpath);
-    AgRemapTable *remap_right = ag_remap_table_load (rpath);
-    g_free (lpath);
-    g_free (rpath);
+    AgRemapTable *remap_left  = NULL;
+    AgRemapTable *remap_right = NULL;
 
-    if (!remap_left || !remap_right) {
-        fprintf (stderr, "error: failed to load remap tables from %s\n",
-                 rectify_path);
-        goto cleanup;
+    if (strncmp (rectify_path, "device://", 9) == 0) {
+        /* Load calibration archive from camera file storage.
+         * "device://" = slot 0, "device://2" = slot 2, etc. */
+        int calib_slot = 0;
+        if (rectify_path[9] != '\0')
+            calib_slot = atoi (rectify_path + 9);
+
+        uint8_t *archive_data = NULL;
+        size_t   archive_len  = 0;
+
+        printf ("Reading calibration from camera (slot %d)...\n", calib_slot);
+        if (ag_device_file_read (device, "UserFile1",
+                                  &archive_data, &archive_len) != 0) {
+            fprintf (stderr, "error: failed to read calibration from camera\n");
+            goto cleanup;
+        }
+
+        /* Extract the requested slot (handles AGMS and legacy AGST). */
+        const uint8_t *slot_data = NULL;
+        size_t         slot_len  = 0;
+        if (ag_multislot_extract_slot (archive_data, archive_len,
+                                        calib_slot,
+                                        &slot_data, &slot_len) != 0) {
+            fprintf (stderr, "error: calibration slot %d not found\n",
+                     calib_slot);
+            g_free (archive_data);
+            goto cleanup;
+        }
+
+        /* Unpack — metadata will be merged with sgbm_params below. */
+        AgCalibMeta dev_meta = {0};
+        if (ag_calib_archive_unpack (slot_data, slot_len,
+                                      &remap_left, &remap_right,
+                                      &dev_meta) != 0) {
+            fprintf (stderr, "error: failed to unpack calibration archive\n");
+            g_free (archive_data);
+            goto cleanup;
+        }
+        g_free (archive_data);
+
+        /* Apply device metadata to sgbm_params (unless CLI overrode them). */
+        if (dev_meta.min_disparity != 0 || dev_meta.num_disparities != 0) {
+            sgbm_params->min_disparity   = dev_meta.min_disparity;
+            sgbm_params->num_disparities = dev_meta.num_disparities;
+            if (sgbm_params->num_disparities <= 0)
+                sgbm_params->num_disparities = 128;
+            sgbm_params->num_disparities =
+                ((sgbm_params->num_disparities + 15) / 16) * 16;
+            printf ("Device calibration metadata: min=%d num=%d\n",
+                    sgbm_params->min_disparity,
+                    sgbm_params->num_disparities);
+        }
+
+        printf ("Rectification maps loaded from device (%ux%u).\n",
+                remap_left->width, remap_left->height);
+    } else {
+        char *lpath = g_build_filename (rectify_path, "calib_result",
+                                         "remap_left.bin", NULL);
+        char *rpath = g_build_filename (rectify_path, "calib_result",
+                                         "remap_right.bin", NULL);
+        remap_left  = ag_remap_table_load (lpath);
+        remap_right = ag_remap_table_load (rpath);
+        g_free (lpath);
+        g_free (rpath);
+
+        if (!remap_left || !remap_right) {
+            fprintf (stderr, "error: failed to load remap tables from %s\n",
+                     rectify_path);
+            goto cleanup;
+        }
+        printf ("Rectification maps loaded (%ux%u).\n",
+                remap_left->width, remap_left->height);
     }
+
     if (remap_left->width != proc_sub_w || remap_left->height != proc_h) {
         fprintf (stderr, "error: remap dimensions %ux%u do not match frame %ux%u\n",
                  remap_left->width, remap_left->height, proc_sub_w, proc_h);
         goto cleanup;
     }
-
-    printf ("Rectification maps loaded (%ux%u).\n", proc_sub_w, proc_h);
 
     /* Create disparity backend. */
     AgDisparityContext *disp_ctx = ag_disparity_create (
@@ -745,8 +801,8 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                                           "sensor binning factor (default: 1)");
     struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
                                           "GigE packet size (default: auto-negotiate)");
-    struct arg_str *rectify   = arg_str1 ("r", "rectify", "<session>",
-                                          "calibration session folder (required)");
+    struct arg_str *rectify   = arg_str1 ("r", "rectify", "<session|device://[slot]>",
+                                          "session folder or device://[0-2] (required)");
     struct arg_str *backend_a = arg_str0 (NULL, "stereo-backend", "<name>",
                                           "sgbm (default), onnx, igev, rt-igev, foundation");
     struct arg_str *model_path_a = arg_str0 (NULL, "model-path", "<path>",
@@ -841,10 +897,13 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
         }
     }
 
-    /* Load calibration metadata for disparity defaults. */
-    CalibMeta meta = { .min_disparity = 0, .num_disparities = 128,
+    /* Load calibration metadata for disparity defaults.
+     * When using device://, metadata is loaded from the archive inside
+     * the preview loop, so skip the filesystem load here. */
+    AgCalibMeta meta = { .min_disparity = 0, .num_disparities = 128,
                        .focal_length_px = 0.0, .baseline_cm = 0.0 };
-    load_calibration_meta (rectify->sval[0], &meta);
+    if (strncmp (rectify->sval[0], "device://", 9) != 0)
+        load_calibration_meta (rectify->sval[0], &meta);
 
     /* CLI overrides. */
     if (min_disp_a->count)  meta.min_disparity  = min_disp_a->ival[0];

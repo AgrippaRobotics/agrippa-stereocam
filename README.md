@@ -40,6 +40,7 @@ ag-cam-tools <command> [options]
 | `calibration-capture` | Interactive stereo pair capture for calibration |
 | `depth-preview-classical` | Live depth map with classical backend controls |
 | `depth-preview-neural` | Live depth map with neural backend controls |
+| `calibration-stash` | Upload/list/delete calibration data on camera |
 
 ### `list`
 
@@ -87,6 +88,7 @@ ag-cam-tools stream -a 192.168.0.201 -f 5 -b 2 -x 30000 -g 12
 ag-cam-tools stream -a 192.168.0.201 -A -f 10              # auto-expose then stream
 ag-cam-tools stream -a 192.168.0.201 -t 0.05               # AprilTag detection (5cm tags)
 ag-cam-tools stream -a 192.168.0.201 -r calibration/calibration_20260225_143015_a1b2c3d4
+ag-cam-tools stream -a 192.168.0.201 -r device://                # rectify from on-camera calibration
 ```
 
 | Option | Description |
@@ -100,13 +102,17 @@ ag-cam-tools stream -a 192.168.0.201 -r calibration/calibration_20260225_143015_
 | `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
 | `-b`, `--binning` | Sensor binning factor: `1` or `2` |
 | `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
-| `-r`, `--rectify` | Rectify using calibration session folder (loads `calib_result/remap_*.bin`) |
+| `-r`, `--rectify` | Rectify using a calibration session folder or `device://` for on-camera calibration |
 | `-t`, `--tag-size` | AprilTag size in meters (enables tagStandard52h13 detection) |
 
 Press `q` or `Esc` to quit the stream window.
 When AprilTag detection is enabled, detections are printed to stdout per frame/eye.
 
-When `--rectify` is given, the stream applies real-time undistortion and rectification using pre-computed remap tables exported by `2.Calibration.ipynb`. The argument is the path to a calibration session folder (e.g. `calibration/calibration_20260225_143015_a1b2c3d4`); the tool loads `calib_result/remap_left.bin` and `calib_result/remap_right.bin` from within it. On ARM64 (Apple Silicon, Jetson) the remap uses NEON SIMD acceleration.
+When `--rectify` is given, the stream applies real-time undistortion and rectification using pre-computed remap tables exported by `2.Calibration.ipynb`. The argument is either:
+- A path to a calibration session folder (e.g. `calibration/calibration_20260225_143015_a1b2c3d4`) — loads `calib_result/remap_left.bin` and `calib_result/remap_right.bin` from within it.
+- `device://` — reads the calibration archive stored on the camera itself (see `calibration-stash`).
+
+On ARM64 (Apple Silicon, Jetson) the remap uses NEON SIMD acceleration.
 
 ### `focus`
 
@@ -177,6 +183,7 @@ Live stereo depth preview with classical disparity backend controls. Displays th
 
 ```bash
 ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r calibration/calibration_20260225_143015_a1b2c3d4
+ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r device://    # from on-camera calibration
 ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r <session> --stereo-backend sgbm --block-size 7
 ```
 
@@ -191,7 +198,7 @@ ag-cam-tools depth-preview-classical -a 192.168.0.201 -A -r <session> --stereo-b
 | `-A`, `--auto-expose` | Auto-expose/gain settle then lock (mutually exclusive with `-x`/`-g`) |
 | `-b`, `--binning` | Sensor binning factor: `1` (default) or `2` |
 | `-p`, `--packet-size` | GigE packet size in bytes (default: auto-negotiate) |
-| `-r`, `--rectify` | **Required.** Calibration session folder (loads `calib_result/remap_*.bin`) |
+| `-r`, `--rectify` | **Required.** Calibration session folder or `device://` for on-camera calibration |
 | `--stereo-backend` | Backend: `sgbm` (default), `onnx` (also accepts `igev`, `foundation` as aliases) |
 | `--model-path` | Path to ONNX model file (required for `onnx` backend) |
 | `--min-disparity` | Override calibration metadata min_disparity |
@@ -226,7 +233,7 @@ Live stereo depth preview intended for neural stereo backends. Displays the rect
 
 ```bash
 ag-cam-tools depth-preview-neural -a 192.168.0.201 -A -r calibration/calibration_20260225_143015_a1b2c3d4 --stereo-backend onnx --model-path model.onnx
-ag-cam-tools depth-preview-neural -a 192.168.0.201 -A -r <session> --stereo-backend igev
+ag-cam-tools depth-preview-neural -a 192.168.0.201 -A -r device:// --stereo-backend igev
 ```
 
 `depth-preview-neural` uses the same CLI options as `depth-preview-classical`, including `--stereo-backend` (default: `sgbm`) and `--model-path` for ONNX models.
@@ -242,6 +249,37 @@ Runtime SGBM keyboard tuning controls are not enabled in this command.
 The `onnx` backend runs any ONNX stereo model in-process via the ONNX Runtime C API. It automatically selects the best execution provider: CUDA > CoreML (macOS) > CPU. The CLI also accepts `igev` and `foundation` as aliases for `onnx`.
 
 Export notebooks for converting PyTorch models to ONNX live in `backends/` — see [backends/IGEV_SETUP.md](backends/IGEV_SETUP.md) for the full setup guide.
+
+### `calibration-stash`
+
+Manage calibration data stored on the camera's persistent UserFile storage (up to 16 MB). Supports up to 3 calibration slots so factory, field recal, and experimental calibrations can coexist. Any host can use `--rectify device://` (or `device://1`, `device://2`) to load on-camera calibration without needing local copies.
+
+```bash
+ag-cam-tools calibration-stash list                                         # show storage info & slots
+ag-cam-tools calibration-stash upload --slot 0 calibration/session_a1b2c3d4 # pack & write to slot 0
+ag-cam-tools calibration-stash upload --slot 2 calibration/session_d4e5f6g7 # write to slot 2
+ag-cam-tools calibration-stash download --slot 0 -o /tmp/dl                 # extract slot 0 to disk
+ag-cam-tools calibration-stash delete --slot 1                              # remove one slot
+ag-cam-tools calibration-stash purge                                        # wipe all calibration data
+```
+
+| Action | Description |
+|--------|-------------|
+| `list` | Show storage stats and calibration slot contents |
+| `upload` | Pack a calibration session and write it to a slot |
+| `download` | Download a calibration slot to a local directory |
+| `delete` | Remove a single calibration slot from the camera |
+| `purge` | Delete the entire calibration file from the camera |
+
+| Option | Description |
+|--------|-------------|
+| `--slot` | Calibration slot: `0`, `1`, or `2` (default: `0`) |
+| `-o`, `--output` | Output directory (required for `download`) |
+| `-s`, `--serial` | Match camera by serial number |
+| `-a`, `--address` | Connect by camera IP address |
+| `-i`, `--interface` | Force NIC selection |
+
+The `upload` action reads `remap_left.bin`, `remap_right.bin`, and `calibration_meta.json` from the session's `calib_result/` directory, compacts the remap tables (4-byte to 3-byte offsets, ~25% savings), and writes them to the selected slot. The `download` action reverses this, re-expanding the remap files to standard 4-byte format so they are byte-identical to the originals.
 
 ### Shell completions
 

@@ -48,7 +48,8 @@ ag_remap_table_load (const char *path)
 
     uint32_t width  = header[0];
     uint32_t height = header[1];
-    /* header[2] = flags, reserved — ignored for now. */
+    /* header[2] = flags: 0 = standard 4-byte offsets (handled here),
+     *                     1 = compact 3-byte offsets (handled by calib_archive). */
 
     if (width == 0 || height == 0 || width > 8192 || height > 8192) {
         fprintf (stderr, "remap: %s: implausible dimensions %ux%u\n",
@@ -76,6 +77,85 @@ ag_remap_table_load (const char *path)
     table->offsets = offsets;
 
     return table;
+}
+
+AgRemapTable *
+ag_remap_table_load_from_memory (const uint8_t *data, size_t len)
+{
+    if (!data || len < 16) {
+        fprintf (stderr, "remap: buffer too small for header (%zu bytes)\n", len);
+        return NULL;
+    }
+
+    /* Read 16-byte header: magic(4) + width(4) + height(4) + flags(4). */
+    if (memcmp (data, AG_REMAP_MAGIC, 4) != 0) {
+        fprintf (stderr, "remap: bad magic in buffer (expected RMAP)\n");
+        return NULL;
+    }
+
+    uint32_t width, height;
+    memcpy (&width,  data + 4,  sizeof (uint32_t));
+    memcpy (&height, data + 8,  sizeof (uint32_t));
+    /* data[12..15] = flags: 0 = standard 4-byte offsets (handled here),
+     *                       1 = compact 3-byte offsets (handled by calib_archive). */
+
+    if (width == 0 || height == 0 || width > 8192 || height > 8192) {
+        fprintf (stderr, "remap: implausible dimensions %ux%u in buffer\n",
+                 width, height);
+        return NULL;
+    }
+
+    size_t n_pixels = (size_t) width * height;
+    size_t expected = 16 + n_pixels * sizeof (uint32_t);
+
+    if (len < expected) {
+        fprintf (stderr, "remap: buffer too small (%zu bytes, need %zu)\n",
+                 len, expected);
+        return NULL;
+    }
+
+    uint32_t *offsets = g_malloc (n_pixels * sizeof (uint32_t));
+    memcpy (offsets, data + 16, n_pixels * sizeof (uint32_t));
+
+    AgRemapTable *table = g_malloc (sizeof (AgRemapTable));
+    table->width   = width;
+    table->height  = height;
+    table->offsets = offsets;
+
+    return table;
+}
+
+int
+ag_remap_table_save (const AgRemapTable *table, const char *path)
+{
+    if (!table || !path)
+        return -1;
+
+    FILE *f = fopen (path, "wb");
+    if (!f) {
+        fprintf (stderr, "remap: cannot create %s: %s\n", path, strerror (errno));
+        return -1;
+    }
+
+    /* 16-byte header: magic(4) + width(4) + height(4) + flags=0(4). */
+    uint32_t header[3] = { table->width, table->height, 0 };
+
+    if (fwrite (AG_REMAP_MAGIC, 1, 4, f) != 4 ||
+        fwrite (header, sizeof (uint32_t), 3, f) != 3) {
+        fprintf (stderr, "remap: %s: failed to write header\n", path);
+        fclose (f);
+        return -1;
+    }
+
+    size_t n_pixels = (size_t) table->width * table->height;
+    if (fwrite (table->offsets, sizeof (uint32_t), n_pixels, f) != n_pixels) {
+        fprintf (stderr, "remap: %s: failed to write offsets\n", path);
+        fclose (f);
+        return -1;
+    }
+
+    fclose (f);
+    return 0;
 }
 
 void

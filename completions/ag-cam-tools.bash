@@ -8,7 +8,7 @@ _ag_cam_tools() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    subcmds="connect list capture stream focus calibration-capture depth-preview-classical depth-preview-neural"
+    subcmds="connect list capture stream focus calibration-capture depth-preview-classical depth-preview-neural calibration-stash"
 
     # Complete subcommand as first argument
     if [[ ${COMP_CWORD} -eq 1 ]]; then
@@ -39,10 +39,10 @@ _ag_cam_tools() {
             return 0
             ;;
         -r|--rectify)
-            # Complete with calibration session folders that contain calib_result/
+            # Complete with device:// or calibration session folders that contain calib_result/
             local sessions
-            sessions=$(find . calibration -maxdepth 2 -type d -name 'calibration_*' 2>/dev/null | \
-                       while read -r d; do [ -d "$d/calib_result" ] && echo "$d"; done)
+            sessions="device:// $(find . calibration -maxdepth 2 -type d -name 'calibration_*' 2>/dev/null | \
+                       while read -r d; do [ -d "$d/calib_result" ] && echo "$d"; done)"
             COMPREPLY=( $(compgen -W "${sessions}" -- "${cur}") )
             return 0
             ;;
@@ -83,6 +83,14 @@ _ag_cam_tools() {
             ;;
         depth-preview-classical|depth-preview-neural)
             COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -f --fps -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size -r --rectify --stereo-backend --model-path --min-disparity --num-disparities --block-size -h --help" -- "${cur}") )
+            ;;
+        calibration-stash)
+            # Sub-action completion as second argument
+            if [[ ${COMP_CWORD} -eq 2 ]]; then
+                COMPREPLY=( $(compgen -W "list upload download delete purge" -- "${cur}") )
+            else
+                COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -o --output --slot -h --help" -- "${cur}") )
+            fi
             ;;
     esac
 }

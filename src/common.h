@@ -8,6 +8,14 @@
 #include <arv.h>
 #include <glib.h>
 
+/* Calibration metadata (shared by calib_archive, depth-preview, etc.). */
+typedef struct {
+    int    min_disparity;
+    int    num_disparities;
+    double focal_length_px;
+    double baseline_cm;
+} AgCalibMeta;
+
 /* Sensor geometry for the PDH016S (DualBayerRG8). */
 #define AG_SENSOR_WIDTH   2880
 #define AG_SENSOR_HEIGHT  1080
