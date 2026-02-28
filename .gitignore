@@ -15,6 +15,7 @@ calibration/calib_result/
 # Python virtualenvs
 calibration/.venv/
 backends/.venv/
+site/
 
 # Vendor SDKs and documentation (local only)
 # ArenaSDK_*/

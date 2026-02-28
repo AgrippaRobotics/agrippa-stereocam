@@ -1,0 +1,40 @@
+site_name: Agrippa Stereo Camera
+site_description: Documentation for ag-cam-tools and the Agrippa stereo camera workflow
+site_url: https://agripparobotics.github.io/agrippa-stereocam/
+repo_url: https://github.com/AgrippaRobotics/agrippa-stereocam
+repo_name: AgrippaRobotics/agrippa-stereocam
+theme:
+  name: readthedocs
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Overview: getting-started/overview.md
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+  - CLI:
+      - Overview: cli/overview.md
+      - list: cli/list.md
+      - connect: cli/connect.md
+      - capture: cli/capture.md
+      - stream: cli/stream.md
+      - focus: cli/focus.md
+      - calibration-capture: cli/calibration-capture.md
+      - depth-preview-classical: cli/depth-preview-classical.md
+      - depth-preview-neural: cli/depth-preview-neural.md
+      - calibration-stash: cli/calibration-stash.md
+  - Workflows:
+      - Bring-Up: workflows/bring-up.md
+      - Calibration: workflows/calibration.md
+      - Testing: workflows/testing.md
+      - Focus Audio: workflows/focus-audio.md
+  - Backends:
+      - Overview: backends/overview.md
+      - IGEV Setup: backends/igev-setup.md
+  - Hardware:
+      - Circuits: hardware/circuits.md
+  - Development:
+      - Binning and Bayer Notes: development/binning-and-bayer.md
