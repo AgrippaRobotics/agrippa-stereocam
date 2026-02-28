@@ -187,6 +187,7 @@ focus_loop (const char *device_id, const char *iface_ip,
 
     guint64 frames_displayed = 0;
     guint64 frames_dropped   = 0;
+    double current_fps       = 0.0;
     const guint8 *gamma_lut  = gamma_lut_2p5 ();
     GTimer *stats_timer  = g_timer_new ();
     GTimer *stdout_timer = g_timer_new ();
@@ -226,7 +227,7 @@ focus_loop (const char *device_id, const char *iface_ip,
                 score_history_index = 0;
                 lock_stable_seconds = 0.0;
                 focus_locked = FALSE;
-                printf ("Switched metric: %s\n", ag_focus_metric_name (metric));
+                printf ("\nSwitched metric: %s\n", ag_focus_metric_name (metric));
             }
         }
         if (g_quit)
@@ -444,28 +445,28 @@ focus_loop (const char *device_id, const char *iface_ip,
 
         frames_displayed++;
 
-        /* Print to stdout periodically (~1/second). */
+        /* Update FPS counter every 5 seconds. */
+        double elapsed = g_timer_elapsed (stats_timer, NULL);
+        if (elapsed >= 5.0) {
+            current_fps = frames_displayed / elapsed;
+            frames_displayed = 0;
+            frames_dropped = 0;
+            g_timer_start (stats_timer);
+        }
+
+        /* Overwrite status line on stdout (~1/second). */
         double stdout_elapsed = g_timer_elapsed (stdout_timer, NULL);
         if (stdout_elapsed >= 1.0) {
             double delta = fabs (score_left - score_right);
             const char *state = low_detail ? "LOW_DETAIL"
                               : focus_locked ? "LOCKED"
                               : "ALIGNING";
-            printf ("[%s] left: %.2f  right: %.2f  delta: %.2f  %s\n",
+            printf ("\r\033[K[%s] L:%.1f R:%.1f d:%.1f %s  %.0f fps",
                     ag_focus_metric_name (metric),
-                    score_left, score_right, delta, state);
+                    score_left, score_right, delta, state,
+                    current_fps);
+            fflush (stdout);
             g_timer_start (stdout_timer);
-        }
-
-        /* FPS stats every 5 seconds. */
-        double elapsed = g_timer_elapsed (stats_timer, NULL);
-        if (elapsed >= 5.0) {
-            printf ("  %.1f fps (displayed=%" G_GUINT64_FORMAT
-                    " dropped=%" G_GUINT64_FORMAT ")\n",
-                    frames_displayed / elapsed, frames_displayed, frames_dropped);
-            frames_displayed = 0;
-            frames_dropped = 0;
-            g_timer_start (stats_timer);
         }
 
         g_usleep ((gulong) trigger_interval_us);
