@@ -175,6 +175,21 @@ int   ag_sgbm_compute (void *sgbm_ptr, uint32_t width, uint32_t height,
                         int16_t *disparity_out);
 int   ag_sgbm_update_params (void *sgbm_ptr, const AgSgbmParams *params);
 void  ag_sgbm_destroy (void *sgbm_ptr);
+
+/*
+ * Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to
+ * a grayscale image.  Enhances local contrast for better stereo
+ * matching on low-texture industrial surfaces.
+ *
+ * clip_limit: contrast limit (2.0 is conservative, 3-4 for low texture).
+ * tile_size:  grid size for adaptive equalization (8 = ~180x135 tiles
+ *             at 1440x1080 resolution).
+ *
+ * input and output may alias (in-place operation is safe).
+ */
+void ag_clahe_apply (const uint8_t *input, uint8_t *output,
+                      uint32_t width, uint32_t height,
+                      double clip_limit, int tile_size);
 #endif
 
 /* ------------------------------------------------------------------ */

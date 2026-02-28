@@ -113,6 +113,11 @@ print_sgbm_controls (void)
 /* ------------------------------------------------------------------ */
 
 typedef struct {
+    /* CLAHE pre-processing (#11). */
+    gboolean clahe;
+    double   clahe_clip;           /* clip limit, recommended 2.0–4.0 */
+    int      clahe_tile;           /* tile grid size, recommended 8 */
+
     /* Specular masking (#12). */
     gboolean specular_mask;
     uint8_t  specular_threshold;   /* 0-255, recommended 250 */
@@ -551,6 +556,18 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
         ag_remap_gray (remap_left,  gray_left,  rect_gray_l);
         ag_remap_gray (remap_right, gray_right, rect_gray_r);
 
+        /* ---- Pre-processing ---- */
+#ifdef HAVE_OPENCV
+        if (postproc->clahe) {
+            ag_clahe_apply (rect_gray_l, rect_gray_l,
+                            proc_sub_w, proc_h,
+                            postproc->clahe_clip, postproc->clahe_tile);
+            ag_clahe_apply (rect_gray_r, rect_gray_r,
+                            proc_sub_w, proc_h,
+                            postproc->clahe_clip, postproc->clahe_tile);
+        }
+#endif
+
         int disp_ok = ag_disparity_compute (disp_ctx,
                                              rect_gray_l, rect_gray_r,
                                              disparity_buf);
@@ -755,6 +772,13 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                                            "near depth limit in cm (computes disparity range)");
     struct arg_dbl *z_far_a   = arg_dbl0 (NULL, "z-far",  "<cm>",
                                            "far depth limit in cm (computes disparity range)");
+    /* Pre-processing flags. */
+    struct arg_lit *clahe_a    = arg_lit0 (NULL, "clahe",
+                                           "CLAHE contrast enhancement before matching");
+    struct arg_dbl *clahe_clip_a = arg_dbl0 (NULL, "clahe-clip", "<value>",
+                                              "CLAHE clip limit (default: 2.0)");
+    struct arg_int *clahe_tile_a = arg_int0 (NULL, "clahe-tile", "<size>",
+                                              "CLAHE tile grid size (default: 8)");
     /* Post-processing flags. */
     struct arg_lit *mask_spec  = arg_lit0 (NULL, "mask-specular",
                                            "invalidate disparity at specular highlights");
@@ -773,6 +797,7 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                          backend_a, model_path_a,
                          min_disp_a, num_disp_a, blk_size_a,
                          z_near_a, z_far_a,
+                         clahe_a, clahe_clip_a, clahe_tile_a,
                          mask_spec, spec_thresh, median_a, morph_a,
                          help, end };
 
@@ -981,6 +1006,9 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
 
     /* Build post-processing options from CLI flags. */
     AgPostProcOpts postproc = {0};
+    postproc.clahe              = clahe_a->count > 0;
+    postproc.clahe_clip         = clahe_clip_a->count ? clahe_clip_a->dval[0] : 2.0;
+    postproc.clahe_tile         = clahe_tile_a->count ? clahe_tile_a->ival[0] : 8;
     postproc.specular_mask      = mask_spec->count > 0;
     postproc.specular_threshold = spec_thresh->count ? (uint8_t) spec_thresh->ival[0] : 250;
     postproc.specular_radius    = 2;

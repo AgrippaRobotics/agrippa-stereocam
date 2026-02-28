@@ -10,8 +10,10 @@
 
 #include <opencv2/core.hpp>
 #include <opencv2/calib3d.hpp>
+#include <opencv2/imgproc.hpp>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 /* Import the C header for types. */
 extern "C" {
@@ -140,4 +142,29 @@ extern "C" void
 ag_sgbm_destroy (void *sgbm_ptr)
 {
     delete static_cast<SgbmHandle *> (sgbm_ptr);
+}
+
+/* ------------------------------------------------------------------ */
+/*  CLAHE pre-processing                                               */
+/* ------------------------------------------------------------------ */
+
+extern "C" void
+ag_clahe_apply (const uint8_t *input, uint8_t *output,
+                uint32_t width, uint32_t height,
+                double clip_limit, int tile_size)
+{
+    cv::Mat in_mat (height, width, CV_8UC1,
+                    const_cast<uint8_t *> (input));
+    cv::Mat out_mat;
+
+    auto clahe = cv::createCLAHE (clip_limit,
+                                   cv::Size (tile_size, tile_size));
+    clahe->apply (in_mat, out_mat);
+
+    /* Copy result row-by-row in case of non-contiguous Mat. */
+    for (uint32_t y = 0; y < height; y++) {
+        const uint8_t *src = out_mat.ptr<uint8_t> (y);
+        uint8_t *dst = output + (size_t) y * width;
+        memcpy (dst, src, width);
+    }
 }
