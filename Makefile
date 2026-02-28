@@ -31,7 +31,8 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/device_file.c \
        $(SRCDIR)/calib_archive.c \
        $(SRCDIR)/calib_load.c \
-       $(SRCDIR)/cmd_calibration_stash.c
+       $(SRCDIR)/cmd_calibration_stash.c \
+       $(SRCDIR)/cmd_bounce.c
 
 VENDOR_SRCS = $(VENDORDIR)/argtable3.c \
               $(VENDORDIR)/cJSON.c
@@ -188,6 +189,7 @@ test-hw: $(TARGET) $(BINDIR)/gen_test_calibration
 	$(TESTDIR)/test_stash_hw.sh
 	$(TESTDIR)/test_binning_hw.sh
 	$(TESTDIR)/test_capture_rectify_hw.sh
+	$(TESTDIR)/test_bounce_hw.sh
 
 test-all: test test-hw
 

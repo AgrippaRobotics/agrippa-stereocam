@@ -134,6 +134,18 @@ _ag_cam_tools_depth_preview() {
         '(-h --help)'{-h,--help}'[print this help]'
 }
 
+_ag_cam_tools_bounce() {
+    _arguments \
+        '(-a --address)-s[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-a --address)--serial=[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-s --serial)-a[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-s --serial)--address=[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-i --interface)'{-i,--interface}'=[restrict to this NIC]:interface:_net_interfaces' \
+        '--no-wait[exit immediately after reset]' \
+        '--timeout=[wait timeout in seconds]:seconds:' \
+        '(-h --help)'{-h,--help}'[print this help]'
+}
+
 _ag_cam_tools_calibration_stash() {
     local -a actions
     actions=(
@@ -172,6 +184,7 @@ _ag_cam_tools() {
         'depth-preview-classical:Live depth map with classical backend controls'
         'depth-preview-neural:Live depth map with neural backend controls'
         'calibration-stash:Upload/list/delete calibration data on camera'
+        'bounce:Reset (power-cycle) the camera over GigE'
     )
 
     if (( CURRENT == 2 )); then
@@ -187,6 +200,7 @@ _ag_cam_tools() {
             depth-preview-classical) _ag_cam_tools_depth_preview ;;
             depth-preview-neural) _ag_cam_tools_depth_preview ;;
             calibration-stash) _ag_cam_tools_calibration_stash ;;
+            bounce) _ag_cam_tools_bounce ;;
         esac
     fi
 }

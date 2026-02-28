@@ -8,7 +8,7 @@ _ag_cam_tools() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    subcmds="connect list capture stream focus calibration-capture depth-preview-classical depth-preview-neural calibration-stash"
+    subcmds="connect list capture stream focus calibration-capture depth-preview-classical depth-preview-neural calibration-stash bounce"
 
     # Complete subcommand as first argument
     if [[ ${COMP_CWORD} -eq 1 ]]; then
@@ -95,6 +95,9 @@ _ag_cam_tools() {
             else
                 COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -o --output --slot -h --help" -- "${cur}") )
             fi
+            ;;
+        bounce)
+            COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface --no-wait --timeout -h --help" -- "${cur}") )
             ;;
     esac
 }

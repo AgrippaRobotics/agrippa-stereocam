@@ -26,6 +26,7 @@ nav:
       - depth-preview-classical: cli/depth-preview-classical.md
       - depth-preview-neural: cli/depth-preview-neural.md
       - calibration-stash: cli/calibration-stash.md
+      - bounce: cli/bounce.md
   - Workflows:
       - Bring-Up: workflows/bring-up.md
       - Calibration: workflows/calibration.md
