@@ -210,6 +210,18 @@ ag_disparity_update_sgbm_params (AgDisparityContext *ctx,
     return -1;
 }
 
+void *
+ag_disparity_get_sgbm_handle (AgDisparityContext *ctx)
+{
+    if (!ctx)
+        return NULL;
+#ifdef HAVE_OPENCV
+    if (ctx->backend == AG_STEREO_SGBM)
+        return ctx->u.sgbm.sgbm_ptr;
+#endif
+    return NULL;
+}
+
 void
 ag_disparity_destroy (AgDisparityContext *ctx)
 {

@@ -130,6 +130,11 @@ typedef struct {
     gboolean morph_cleanup;
     int      morph_close_radius;   /* recommended 1-2 */
     int      morph_open_radius;    /* recommended 1-2 */
+
+    /* WLS disparity filter (#9). */
+    gboolean wls_filter;
+    double   wls_lambda;           /* regularization strength, default 8000.0 */
+    double   wls_sigma;            /* edge sensitivity, default 1.5 */
 } AgPostProcOpts;
 
 /* ------------------------------------------------------------------ */
@@ -289,6 +294,11 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     int16_t *disparity_buf     = g_malloc (eye_pixels * sizeof (int16_t));
     int16_t *disparity_scratch = g_malloc (eye_pixels * sizeof (int16_t));
     guint8  *disparity_rgb     = g_malloc (eye_rgb);
+
+    /* Right-to-left disparity buffer (only needed for WLS filter). */
+    int16_t *disparity_rl = NULL;
+    if (postproc->wls_filter)
+        disparity_rl = g_malloc (eye_pixels * sizeof (int16_t));
 
     /* Start acquisition. */
     printf ("Starting acquisition at %.1f Hz...\n", fps);
@@ -568,9 +578,21 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
         }
 #endif
 
-        int disp_ok = ag_disparity_compute (disp_ctx,
+        int disp_ok;
+#ifdef HAVE_OPENCV
+        if (postproc->wls_filter && backend == AG_STEREO_SGBM) {
+            void *sgbm_handle = ag_disparity_get_sgbm_handle (disp_ctx);
+            disp_ok = ag_sgbm_compute_lr (sgbm_handle,
+                                           proc_sub_w, proc_h,
+                                           rect_gray_l, rect_gray_r,
+                                           disparity_buf, disparity_rl);
+        } else
+#endif
+        {
+            disp_ok = ag_disparity_compute (disp_ctx,
                                              rect_gray_l, rect_gray_r,
                                              disparity_buf);
+        }
 
         /* ---- Post-processing chain ---- */
         if (disp_ok == 0) {
@@ -597,6 +619,24 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                                             proc_sub_w, proc_h,
                                             postproc->morph_close_radius,
                                             postproc->morph_open_radius);
+
+            /* 4. WLS filter (edge-preserving smooth + occlusion fill). */
+#ifdef HAVE_OPENCV
+            if (postproc->wls_filter && backend == AG_STEREO_SGBM &&
+                disparity_rl != NULL) {
+                void *sgbm_handle = ag_disparity_get_sgbm_handle (disp_ctx);
+                if (ag_sgbm_wls_filter (sgbm_handle,
+                                         rect_gray_l,
+                                         disparity_buf, disparity_rl,
+                                         disparity_scratch,
+                                         proc_sub_w, proc_h,
+                                         postproc->wls_lambda,
+                                         postproc->wls_sigma) == 0) {
+                    memcpy (disparity_buf, disparity_scratch,
+                            eye_pixels * sizeof (int16_t));
+                }
+            }
+#endif
         }
 
         ag_disparity_colorize (disparity_buf, proc_sub_w, proc_h,
@@ -699,6 +739,7 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     arv_camera_stop_acquisition (camera, NULL);
 
 cleanup_sdl:
+    g_free (disparity_rl);
     g_free (disparity_rgb);
     g_free (disparity_scratch);
     g_free (disparity_buf);
@@ -788,6 +829,12 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                                             "median filter kernel size (3 or 5, default: off)");
     struct arg_lit *morph_a    = arg_lit0 (NULL, "morph-cleanup",
                                            "morphological close+open on disparity");
+    struct arg_lit *wls_a     = arg_lit0 (NULL, "wls-filter",
+                                           "WLS edge-preserving disparity filter (SGBM only)");
+    struct arg_dbl *wls_lam_a = arg_dbl0 (NULL, "wls-lambda", "<value>",
+                                            "WLS regularization strength (default: 8000.0)");
+    struct arg_dbl *wls_sig_a = arg_dbl0 (NULL, "wls-sigma", "<value>",
+                                            "WLS edge sensitivity (default: 1.5)");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (20);
 
@@ -799,6 +846,7 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                          z_near_a, z_far_a,
                          clahe_a, clahe_clip_a, clahe_tile_a,
                          mask_spec, spec_thresh, median_a, morph_a,
+                         wls_a, wls_lam_a, wls_sig_a,
                          help, end };
 
     int exitcode = EXIT_SUCCESS;
@@ -1016,6 +1064,9 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
     postproc.morph_cleanup      = morph_a->count > 0;
     postproc.morph_close_radius = 1;
     postproc.morph_open_radius  = 1;
+    postproc.wls_filter         = wls_a->count > 0;
+    postproc.wls_lambda         = wls_lam_a->count ? wls_lam_a->dval[0] : 8000.0;
+    postproc.wls_sigma          = wls_sig_a->count ? wls_sig_a->dval[0] : 1.5;
 
     exitcode = depth_preview_loop (device_id, iface_ip, fps,
                                     exposure_us, gain_db,
