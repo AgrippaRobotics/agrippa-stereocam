@@ -7,13 +7,17 @@
  * No camera hardware is required.
  *
  * Build:  make test
- * Run:    bin/test_binning [-s suite] [-t test]
+ * Run:    bin/test_binning [-v]
  */
 
-#include "../vendor/greatest.h"
+#include "../vendor/unity/unity.h"
 #include "imgproc.h"
 
 #include <string.h>
+#include <stdlib.h>
+
+void setUp (void) {}
+void tearDown (void) {}
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -71,10 +75,10 @@ downsample_rgb_2x (const guint8 *src, guint src_w, guint src_h,
 }
 
 /* ------------------------------------------------------------------ */
-/*  Suite 1: bayer_baseline — debayer works on valid Bayer             */
+/*  Tests: bayer_baseline — debayer works on valid Bayer                */
 /* ------------------------------------------------------------------ */
 
-TEST debayer_pure_red (void)
+void test_debayer_pure_red (void)
 {
     enum { W = 8, H = 8 };
     guint8 bayer[W * H];
@@ -90,14 +94,13 @@ TEST debayer_pure_red (void)
             guint8 r = rgb[idx + 0];
             guint8 b = rgb[idx + 2];
             /* Red should dominate; blue should be near zero. */
-            ASSERT (r > 100);
-            ASSERT (b < 50);
+            TEST_ASSERT_TRUE (r > 100);
+            TEST_ASSERT_TRUE (b < 50);
         }
     }
-    PASS ();
 }
 
-TEST debayer_uniform_white (void)
+void test_debayer_uniform_white (void)
 {
     enum { W = 8, H = 8 };
     guint8 bayer[W * H];
@@ -110,25 +113,18 @@ TEST debayer_uniform_white (void)
     for (guint y = 2; y < H - 2; y++) {
         for (guint x = 2; x < W - 2; x++) {
             size_t idx = ((size_t) y * W + x) * 3;
-            ASSERT_EQ (200, rgb[idx + 0]);
-            ASSERT_EQ (200, rgb[idx + 1]);
-            ASSERT_EQ (200, rgb[idx + 2]);
+            TEST_ASSERT_EQUAL_UINT8 (200, rgb[idx + 0]);
+            TEST_ASSERT_EQUAL_UINT8 (200, rgb[idx + 1]);
+            TEST_ASSERT_EQUAL_UINT8 (200, rgb[idx + 2]);
         }
     }
-    PASS ();
-}
-
-SUITE (bayer_baseline)
-{
-    RUN_TEST (debayer_pure_red);
-    RUN_TEST (debayer_uniform_white);
 }
 
 /* ------------------------------------------------------------------ */
-/*  Suite 2: software_bin_destroys_bayer — structural proof            */
+/*  Tests: software_bin_destroys_bayer — structural proof              */
 /* ------------------------------------------------------------------ */
 
-TEST bin2x2_mixes_channels (void)
+void test_bin2x2_mixes_channels (void)
 {
     /* Pure-red scene: R=200, G=0, B=0.
      * Each 2x2 Bayer quad has one R(200), two G(0), one B(0).
@@ -142,12 +138,10 @@ TEST bin2x2_mixes_channels (void)
     software_bin_2x2 (src, SRC_W, SRC_H, dst, DST_W, DST_H);
 
     for (int i = 0; i < DST_W * DST_H; i++)
-        ASSERT_EQ (50, dst[i]);
-
-    PASS ();
+        TEST_ASSERT_EQUAL_UINT8 (50, dst[i]);
 }
 
-TEST bin2x2_green_scene (void)
+void test_bin2x2_green_scene (void)
 {
     /* Pure-green scene: R=0, G=200, B=0.
      * Each 2x2 quad: R(0), G(200), G(200), B(0).
@@ -161,12 +155,10 @@ TEST bin2x2_green_scene (void)
     software_bin_2x2 (src, SRC_W, SRC_H, dst, DST_W, DST_H);
 
     for (int i = 0; i < DST_W * DST_H; i++)
-        ASSERT_EQ (100, dst[i]);
-
-    PASS ();
+        TEST_ASSERT_EQUAL_UINT8 (100, dst[i]);
 }
 
-TEST bin2x2_output_is_uniform (void)
+void test_bin2x2_output_is_uniform (void)
 {
     /* Scene with distinct channels: R=200, G=100, B=50.
      * Each 2x2 quad: R(200), G(100), G(100), B(50).
@@ -185,28 +177,19 @@ TEST bin2x2_output_is_uniform (void)
 
     /* All pixels should be 112. */
     for (int i = 0; i < DST_W * DST_H; i++)
-        ASSERT_EQ (112, dst[i]);
+        TEST_ASSERT_EQUAL_UINT8 (112, dst[i]);
 
     /* Adjacent pixels that would be different Bayer sites are identical. */
-    ASSERT_EQ (dst[0], dst[1]);  /* "R" position vs "G" position */
-    ASSERT_EQ (dst[0], dst[DST_W]);  /* "R" position vs next-row "G" */
-    ASSERT_EQ (dst[0], dst[DST_W + 1]);  /* "R" position vs "B" position */
-
-    PASS ();
-}
-
-SUITE (software_bin_destroys_bayer)
-{
-    RUN_TEST (bin2x2_mixes_channels);
-    RUN_TEST (bin2x2_green_scene);
-    RUN_TEST (bin2x2_output_is_uniform);
+    TEST_ASSERT_EQUAL_UINT8 (dst[0], dst[1]);  /* "R" position vs "G" position */
+    TEST_ASSERT_EQUAL_UINT8 (dst[0], dst[DST_W]);  /* "R" position vs next-row "G" */
+    TEST_ASSERT_EQUAL_UINT8 (dst[0], dst[DST_W + 1]);  /* "R" position vs "B" position */
 }
 
 /* ------------------------------------------------------------------ */
-/*  Suite 3: debayer_after_bin_is_wrong — downstream consequence       */
+/*  Tests: debayer_after_bin_is_wrong — downstream consequence         */
 /* ------------------------------------------------------------------ */
 
-TEST correct_vs_broken_pipeline (void)
+void test_correct_vs_broken_pipeline (void)
 {
     /* Scene: R=200, G=50, B=20.
      *
@@ -255,15 +238,13 @@ TEST correct_vs_broken_pipeline (void)
      * Correct R channel is ~200, broken is ~80: avg diff should be >50. */
     int avg_r_diff = total_r_diff / n;
     int avg_b_diff = total_b_diff / n;
-    ASSERT (avg_r_diff > 50);
+    TEST_ASSERT_TRUE (avg_r_diff > 50);
     /* B channel: correct is ~20, broken is ~80, so diff should be >30. */
-    ASSERT (avg_b_diff > 30);
+    TEST_ASSERT_TRUE (avg_b_diff > 30);
     (void) total_g_diff;
-
-    PASS ();
 }
 
-TEST binned_debayer_equals_gray (void)
+void test_binned_debayer_equals_gray (void)
 {
     /* After bin 2x2, the data is uniform (no Bayer variation).
      * Debayering should produce R == G == B at every interior pixel,
@@ -283,16 +264,14 @@ TEST binned_debayer_equals_gray (void)
     for (guint y = 2; y < DST_H - 2; y++) {
         for (guint x = 2; x < DST_W - 2; x++) {
             size_t idx = ((size_t) y * DST_W + x) * 3;
-            ASSERT_EQ (rgb[idx + 0], rgb[idx + 1]);  /* R == G */
-            ASSERT_EQ (rgb[idx + 1], rgb[idx + 2]);  /* G == B */
-            ASSERT_EQ (112, rgb[idx + 0]);            /* value is correct */
+            TEST_ASSERT_EQUAL_UINT8 (rgb[idx + 0], rgb[idx + 1]);  /* R == G */
+            TEST_ASSERT_EQUAL_UINT8 (rgb[idx + 1], rgb[idx + 2]);  /* G == B */
+            TEST_ASSERT_EQUAL_UINT8 (112, rgb[idx + 0]);            /* value is correct */
         }
     }
-
-    PASS ();
 }
 
-TEST disparity_path_roundtrip (void)
+void test_disparity_path_roundtrip (void)
 {
     /* The depth-preview disparity path currently does:
      *   bin -> debayer -> rgb_to_gray
@@ -327,22 +306,13 @@ TEST disparity_path_roundtrip (void)
             size_t idx = (size_t) y * DST_W + x;
             int diff = abs ((int) gray_roundtrip[idx] - (int) binned[idx]);
             /* Allow tolerance of 1 for fixed-point rounding. */
-            ASSERT (diff <= 1);
+            TEST_ASSERT_TRUE (diff <= 1);
         }
     }
-
-    PASS ();
-}
-
-SUITE (debayer_after_bin_is_wrong)
-{
-    RUN_TEST (correct_vs_broken_pipeline);
-    RUN_TEST (binned_debayer_equals_gray);
-    RUN_TEST (disparity_path_roundtrip);
 }
 
 /* ------------------------------------------------------------------ */
-/*  Suite 4: deinterleave_then_bin — end-to-end mini-pipeline          */
+/*  Tests: deinterleave_then_bin — end-to-end mini-pipeline            */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -376,7 +346,7 @@ fill_dual_bayer (guint8 *buf, guint full_w, guint h,
     g_free (right_tmp);
 }
 
-TEST dual_bayer_pipeline_loses_color (void)
+void test_dual_bayer_pipeline_loses_color (void)
 {
     /* Left eye: pure red scene (R=200, G=0, B=0).
      * Right eye: pure blue scene (R=0, G=0, B=200).
@@ -403,8 +373,8 @@ TEST dual_bayer_pipeline_loses_color (void)
 
     /* Both binned outputs should be 50 everywhere. */
     for (int i = 0; i < BIN_W * BIN_H; i++) {
-        ASSERT_EQ (50, left_bin[i]);
-        ASSERT_EQ (50, right_bin[i]);
+        TEST_ASSERT_EQUAL_UINT8 (50, left_bin[i]);
+        TEST_ASSERT_EQUAL_UINT8 (50, right_bin[i]);
     }
 
     /* After debayering, both should produce identical RGB. */
@@ -414,31 +384,34 @@ TEST dual_bayer_pipeline_loses_color (void)
     debayer_rg8_to_rgb (right_bin, rgb_right, BIN_W, BIN_H);
 
     /* The red-vs-blue distinction is lost: identical output. */
-    ASSERT_MEM_EQ (rgb_left, rgb_right, BIN_W * BIN_H * 3);
-
-    PASS ();
-}
-
-SUITE (deinterleave_then_bin)
-{
-    RUN_TEST (dual_bayer_pipeline_loses_color);
+    TEST_ASSERT_EQUAL_MEMORY (rgb_left, rgb_right, BIN_W * BIN_H * 3);
 }
 
 /* ------------------------------------------------------------------ */
 /*  main                                                               */
 /* ------------------------------------------------------------------ */
 
-GREATEST_MAIN_DEFS ();
-
 int
-main (int argc, char **argv)
+main (void)
 {
-    GREATEST_MAIN_BEGIN ();
+    UNITY_BEGIN ();
 
-    RUN_SUITE (bayer_baseline);
-    RUN_SUITE (software_bin_destroys_bayer);
-    RUN_SUITE (debayer_after_bin_is_wrong);
-    RUN_SUITE (deinterleave_then_bin);
+    /* bayer_baseline */
+    RUN_TEST (test_debayer_pure_red);
+    RUN_TEST (test_debayer_uniform_white);
 
-    GREATEST_MAIN_END ();
+    /* software_bin_destroys_bayer */
+    RUN_TEST (test_bin2x2_mixes_channels);
+    RUN_TEST (test_bin2x2_green_scene);
+    RUN_TEST (test_bin2x2_output_is_uniform);
+
+    /* debayer_after_bin_is_wrong */
+    RUN_TEST (test_correct_vs_broken_pipeline);
+    RUN_TEST (test_binned_debayer_equals_gray);
+    RUN_TEST (test_disparity_path_roundtrip);
+
+    /* deinterleave_then_bin */
+    RUN_TEST (test_dual_bayer_pipeline_loses_color);
+
+    return UNITY_END ();
 }

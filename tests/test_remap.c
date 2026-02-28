@@ -5,10 +5,10 @@
  * No camera hardware is required.
  *
  * Build:  make test
- * Run:    bin/test_remap [-s suite] [-t test]
+ * Run:    bin/test_remap [-v]
  */
 
-#include "../vendor/greatest.h"
+#include "../vendor/unity/unity.h"
 #include "remap.h"
 
 #include <string.h>
@@ -19,55 +19,46 @@
 #define EXPECTED_WIDTH   1440
 #define EXPECTED_HEIGHT  1080
 
+void setUp (void) {}
+void tearDown (void) {}
+
 /* ------------------------------------------------------------------ */
-/*  Suite: remap_load_file                                             */
+/*  Tests: remap_load_file                                             */
 /* ------------------------------------------------------------------ */
 
-TEST load_left_remap (void)
+void test_load_left_remap (void)
 {
     AgRemapTable *t = ag_remap_table_load (SAMPLE_LEFT);
-    ASSERT (t != NULL);
-    ASSERT_EQ (EXPECTED_WIDTH,  t->width);
-    ASSERT_EQ (EXPECTED_HEIGHT, t->height);
-    ASSERT (t->offsets != NULL);
+    TEST_ASSERT_NOT_NULL (t);
+    TEST_ASSERT_EQUAL_UINT32 (EXPECTED_WIDTH,  t->width);
+    TEST_ASSERT_EQUAL_UINT32 (EXPECTED_HEIGHT, t->height);
+    TEST_ASSERT_NOT_NULL (t->offsets);
     ag_remap_table_free (t);
-    PASS ();
 }
 
-TEST load_right_remap (void)
+void test_load_right_remap (void)
 {
     AgRemapTable *t = ag_remap_table_load (SAMPLE_RIGHT);
-    ASSERT (t != NULL);
-    ASSERT_EQ (EXPECTED_WIDTH,  t->width);
-    ASSERT_EQ (EXPECTED_HEIGHT, t->height);
-    ASSERT (t->offsets != NULL);
+    TEST_ASSERT_NOT_NULL (t);
+    TEST_ASSERT_EQUAL_UINT32 (EXPECTED_WIDTH,  t->width);
+    TEST_ASSERT_EQUAL_UINT32 (EXPECTED_HEIGHT, t->height);
+    TEST_ASSERT_NOT_NULL (t->offsets);
     ag_remap_table_free (t);
-    PASS ();
 }
 
-TEST load_nonexistent (void)
+void test_load_nonexistent (void)
 {
     AgRemapTable *t = ag_remap_table_load ("/no/such/file.bin");
-    ASSERT (t == NULL);
-    PASS ();
+    TEST_ASSERT_NULL (t);
 }
 
-TEST free_null_safe (void)
+void test_free_null_safe (void)
 {
     ag_remap_table_free (NULL);   /* must not crash */
-    PASS ();
-}
-
-SUITE (remap_load_file)
-{
-    RUN_TEST (load_left_remap);
-    RUN_TEST (load_right_remap);
-    RUN_TEST (load_nonexistent);
-    RUN_TEST (free_null_safe);
 }
 
 /* ------------------------------------------------------------------ */
-/*  Suite: remap_load_from_memory                                      */
+/*  Tests: remap_load_from_memory                                      */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -89,36 +80,35 @@ slurp_file (const char *path, size_t *out_len)
     return (uint8_t *) contents;
 }
 
-TEST from_memory_matches_file (void)
+void test_from_memory_matches_file (void)
 {
     /* Load via file path. */
     AgRemapTable *file_tab = ag_remap_table_load (SAMPLE_LEFT);
-    ASSERT (file_tab != NULL);
+    TEST_ASSERT_NOT_NULL (file_tab);
 
     /* Load via memory. */
     size_t   buf_len = 0;
     uint8_t *buf = slurp_file (SAMPLE_LEFT, &buf_len);
-    ASSERT (buf != NULL);
+    TEST_ASSERT_NOT_NULL (buf);
 
     AgRemapTable *mem_tab = ag_remap_table_load_from_memory (buf, buf_len);
-    ASSERT (mem_tab != NULL);
+    TEST_ASSERT_NOT_NULL (mem_tab);
 
     /* Same dimensions. */
-    ASSERT_EQ (file_tab->width,  mem_tab->width);
-    ASSERT_EQ (file_tab->height, mem_tab->height);
+    TEST_ASSERT_EQUAL_UINT32 (file_tab->width,  mem_tab->width);
+    TEST_ASSERT_EQUAL_UINT32 (file_tab->height, mem_tab->height);
 
     /* Identical offset data. */
     size_t n = (size_t) file_tab->width * file_tab->height;
-    ASSERT_MEM_EQ (file_tab->offsets, mem_tab->offsets,
-                   n * sizeof (uint32_t));
+    TEST_ASSERT_EQUAL_MEMORY (file_tab->offsets, mem_tab->offsets,
+                              n * sizeof (uint32_t));
 
     ag_remap_table_free (file_tab);
     ag_remap_table_free (mem_tab);
     g_free (buf);
-    PASS ();
 }
 
-TEST bad_magic_rejected (void)
+void test_bad_magic_rejected (void)
 {
     uint8_t buf[32] = {0};
     memcpy (buf, "XXXX", 4);
@@ -128,19 +118,17 @@ TEST bad_magic_rejected (void)
     memcpy (buf + 8, &h, 4);
 
     AgRemapTable *t = ag_remap_table_load_from_memory (buf, 32);
-    ASSERT (t == NULL);
-    PASS ();
+    TEST_ASSERT_NULL (t);
 }
 
-TEST truncated_header_rejected (void)
+void test_truncated_header_rejected (void)
 {
     uint8_t buf[8] = { 'R', 'M', 'A', 'P', 0, 0, 0, 0 };
     AgRemapTable *t = ag_remap_table_load_from_memory (buf, 8);
-    ASSERT (t == NULL);
-    PASS ();
+    TEST_ASSERT_NULL (t);
 }
 
-TEST truncated_data_rejected (void)
+void test_truncated_data_rejected (void)
 {
     /* Valid header: RMAP, 1440, 1080, flags=0, but no offset data. */
     uint8_t buf[16];
@@ -149,20 +137,11 @@ TEST truncated_data_rejected (void)
     memcpy (buf + 4, vals, 12);
 
     AgRemapTable *t = ag_remap_table_load_from_memory (buf, 16);
-    ASSERT (t == NULL);
-    PASS ();
-}
-
-SUITE (remap_load_from_memory)
-{
-    RUN_TEST (from_memory_matches_file);
-    RUN_TEST (bad_magic_rejected);
-    RUN_TEST (truncated_header_rejected);
-    RUN_TEST (truncated_data_rejected);
+    TEST_ASSERT_NULL (t);
 }
 
 /* ------------------------------------------------------------------ */
-/*  Suite: remap_apply                                                 */
+/*  Tests: remap_apply                                                 */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -184,7 +163,7 @@ make_test_table (uint32_t w, uint32_t h, uint32_t fill)
     return t;
 }
 
-TEST rgb_identity (void)
+void test_rgb_identity (void)
 {
     uint32_t w = 4, h = 4;
     size_t n = (size_t) w * h;
@@ -202,15 +181,14 @@ TEST rgb_identity (void)
     guint8 *dst = g_malloc0 (n * 3);
     ag_remap_rgb (t, src, dst);
 
-    ASSERT_MEM_EQ (src, dst, n * 3);
+    TEST_ASSERT_EQUAL_MEMORY (src, dst, n * 3);
 
     g_free (src);
     g_free (dst);
     ag_remap_table_free (t);
-    PASS ();
 }
 
-TEST rgb_sentinel_produces_black (void)
+void test_rgb_sentinel_produces_black (void)
 {
     uint32_t w = 4, h = 4;
     size_t n = (size_t) w * h;
@@ -227,15 +205,14 @@ TEST rgb_sentinel_produces_black (void)
 
     /* All output pixels must be (0, 0, 0). */
     for (size_t i = 0; i < n * 3; i++)
-        ASSERT_EQ (0, dst[i]);
+        TEST_ASSERT_EQUAL_UINT8 (0, dst[i]);
 
     g_free (src);
     g_free (dst);
     ag_remap_table_free (t);
-    PASS ();
 }
 
-TEST gray_identity (void)
+void test_gray_identity (void)
 {
     uint32_t w = 4, h = 4;
     size_t n = (size_t) w * h;
@@ -251,15 +228,14 @@ TEST gray_identity (void)
     guint8 *dst = g_malloc0 (n);
     ag_remap_gray (t, src, dst);
 
-    ASSERT_MEM_EQ (src, dst, n);
+    TEST_ASSERT_EQUAL_MEMORY (src, dst, n);
 
     g_free (src);
     g_free (dst);
     ag_remap_table_free (t);
-    PASS ();
 }
 
-TEST gray_sentinel_produces_black (void)
+void test_gray_sentinel_produces_black (void)
 {
     uint32_t w = 4, h = 4;
     size_t n = (size_t) w * h;
@@ -275,36 +251,39 @@ TEST gray_sentinel_produces_black (void)
     ag_remap_gray (t, src, dst);
 
     for (size_t i = 0; i < n; i++)
-        ASSERT_EQ (0, dst[i]);
+        TEST_ASSERT_EQUAL_UINT8 (0, dst[i]);
 
     g_free (src);
     g_free (dst);
     ag_remap_table_free (t);
-    PASS ();
-}
-
-SUITE (remap_apply)
-{
-    RUN_TEST (rgb_identity);
-    RUN_TEST (rgb_sentinel_produces_black);
-    RUN_TEST (gray_identity);
-    RUN_TEST (gray_sentinel_produces_black);
 }
 
 /* ------------------------------------------------------------------ */
 /*  Main                                                               */
 /* ------------------------------------------------------------------ */
 
-GREATEST_MAIN_DEFS ();
-
 int
-main (int argc, char *argv[])
+main (void)
 {
-    GREATEST_MAIN_BEGIN ();
+    UNITY_BEGIN ();
 
-    RUN_SUITE (remap_load_file);
-    RUN_SUITE (remap_load_from_memory);
-    RUN_SUITE (remap_apply);
+    /* remap_load_file */
+    RUN_TEST (test_load_left_remap);
+    RUN_TEST (test_load_right_remap);
+    RUN_TEST (test_load_nonexistent);
+    RUN_TEST (test_free_null_safe);
 
-    GREATEST_MAIN_END ();
+    /* remap_load_from_memory */
+    RUN_TEST (test_from_memory_matches_file);
+    RUN_TEST (test_bad_magic_rejected);
+    RUN_TEST (test_truncated_header_rejected);
+    RUN_TEST (test_truncated_data_rejected);
+
+    /* remap_apply */
+    RUN_TEST (test_rgb_identity);
+    RUN_TEST (test_rgb_sentinel_produces_black);
+    RUN_TEST (test_gray_identity);
+    RUN_TEST (test_gray_sentinel_produces_black);
+
+    return UNITY_END ();
 }

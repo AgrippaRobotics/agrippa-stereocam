@@ -157,30 +157,76 @@ TEST_CFLAGS = -Wall -Wextra -O2 -g \
               -I$(SRCDIR) -I$(VENDORDIR)
 TEST_LIBS   = $(shell pkg-config --libs glib-2.0) -lz -lm
 
+# Unity test framework (vendor/unity/).
+UNITY_DIR    = $(VENDORDIR)/unity
+UNITY_OBJ    = $(BINDIR)/unity.o
+UNITY_CFLAGS = $(TEST_CFLAGS) -I$(UNITY_DIR) -DUNITY_INCLUDE_DOUBLE
+
+$(UNITY_OBJ): $(UNITY_DIR)/unity.c | $(BINDIR)
+	$(CC) -Wall -O2 -g -I$(UNITY_DIR) -DUNITY_INCLUDE_DOUBLE -c -o $@ $<
+
 # Object files needed by unit tests (no main.o, no cmd_*.o).
 TEST_OBJS = $(BINDIR)/remap.o $(BINDIR)/calib_archive.o $(BINDIR)/cJSON.o
 
-$(BINDIR)/test_calib_archive: $(TESTDIR)/test_calib_archive.c $(TEST_OBJS) | $(BINDIR)
-	$(CC) $(TEST_CFLAGS) -o $@ $< $(TEST_OBJS) $(TEST_LIBS)
+# Mock object for device_file functions (tests that need it).
+MOCK_DEVICE_FILE_OBJ = $(BINDIR)/mock_device_file.o
 
-$(BINDIR)/test_remap: $(TESTDIR)/test_remap.c $(BINDIR)/remap.o | $(BINDIR)
-	$(CC) $(TEST_CFLAGS) -o $@ $< $(BINDIR)/remap.o $(TEST_LIBS)
+$(MOCK_DEVICE_FILE_OBJ): $(TESTDIR)/mock_device_file.c $(TESTDIR)/mock_device_file.h | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -I$(TESTDIR) -c -o $@ $<
 
-$(BINDIR)/test_binning: $(TESTDIR)/test_binning.c $(BINDIR)/imgproc.o | $(BINDIR)
-	$(CC) $(TEST_CFLAGS) -o $@ $< $(BINDIR)/imgproc.o $(TEST_LIBS)
+$(BINDIR)/test_calib_archive: $(TESTDIR)/test_calib_archive.c $(TEST_OBJS) $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(TEST_OBJS) $(UNITY_OBJ) $(TEST_LIBS)
 
-$(BINDIR)/test_calib_load: $(TESTDIR)/test_calib_load.c $(TEST_OBJS) $(BINDIR)/calib_load.o | $(BINDIR)
-	$(CC) $(TEST_CFLAGS) -o $@ $< $(TEST_OBJS) $(BINDIR)/calib_load.o $(TEST_LIBS)
+$(BINDIR)/test_remap: $(TESTDIR)/test_remap.c $(BINDIR)/remap.o $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/remap.o $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_binning: $(TESTDIR)/test_binning.c $(BINDIR)/imgproc.o $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/imgproc.o $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_calib_load: $(TESTDIR)/test_calib_load.c $(TEST_OBJS) $(BINDIR)/calib_load.o \
+                           $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(TEST_OBJS) $(BINDIR)/calib_load.o $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_focus: $(TESTDIR)/test_focus.c $(BINDIR)/focus.o $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/focus.o $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_stereo_common: $(TESTDIR)/test_stereo_common.c $(SRCDIR)/stereo_common.c \
+                              $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -UHAVE_OPENCV -UHAVE_ONNXRUNTIME -o $@ \
+	      $(TESTDIR)/test_stereo_common.c $(SRCDIR)/stereo_common.c $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_imgproc_extra: $(TESTDIR)/test_imgproc_extra.c $(BINDIR)/imgproc.o \
+                              $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/imgproc.o $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_image: $(TESTDIR)/test_image.c $(BINDIR)/image.o $(BINDIR)/imgproc.o \
+                      $(BINDIR)/remap.o $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/image.o $(BINDIR)/imgproc.o \
+	      $(BINDIR)/remap.o $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_calib_load_slot: $(TESTDIR)/test_calib_load_slot.c $(TEST_OBJS) \
+                                $(BINDIR)/calib_load.o $(MOCK_DEVICE_FILE_OBJ) \
+                                $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -I$(TESTDIR) -o $@ $< $(TEST_OBJS) $(BINDIR)/calib_load.o \
+	      $(MOCK_DEVICE_FILE_OBJ) $(UNITY_OBJ) $(TEST_LIBS)
 
 $(BINDIR)/gen_test_calibration: $(TESTDIR)/gen_test_calibration.c | $(BINDIR)
 	$(CC) -Wall -O2 -o $@ $<
 
-test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning $(BINDIR)/test_calib_load
+test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning \
+      $(BINDIR)/test_calib_load $(BINDIR)/test_focus $(BINDIR)/test_stereo_common \
+      $(BINDIR)/test_imgproc_extra $(BINDIR)/test_image \
+      $(BINDIR)/test_calib_load_slot
 	@echo "=== Unit Tests ==="
 	$(BINDIR)/test_calib_archive
 	$(BINDIR)/test_remap
 	$(BINDIR)/test_binning
 	$(BINDIR)/test_calib_load
+	$(BINDIR)/test_focus
+	$(BINDIR)/test_stereo_common
+	$(BINDIR)/test_imgproc_extra
+	$(BINDIR)/test_image
+	$(BINDIR)/test_calib_load_slot
 
 # ---- Hardware Integration Tests (camera required) ---------------------
 

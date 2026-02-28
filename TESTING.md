@@ -12,44 +12,101 @@ make test-all      # both
 
 ## Unit tests
 
-Unit tests are C programs that use the [greatest.h](https://github.com/silentbicycle/greatest) single-header test framework (`vendor/greatest.h`).  They link only against glib and the specific `.o` files under test -- never against Aravis -- so they build and run on any development machine.
+Unit tests are C programs that link only against glib and the specific `.o` files under test -- never against Aravis -- so they build and run on any development machine.
+
+All unit tests use the [Unity](https://github.com/ThrowTheSwitch/Unity) framework (`vendor/unity/`).
 
 ### Test binaries
 
 | Binary | Source | Tests | What it covers |
 |--------|--------|-------|----------------|
-| `bin/test_calib_archive` | `tests/test_calib_archive.c` | Pack/unpack/list of calibration archives | `calib_archive.c` round-trip serialisation using sample data in `calibration/sample_calibration/` |
-| `bin/test_remap` | `tests/test_remap.c` | Remap table load and apply | `remap.c` loading `.bin` remap files, dimensions, pixel mapping |
-| `bin/test_binning` | `tests/test_binning.c` | Bayer CFA vs binning correctness | `imgproc.c` debayer, software binning, deinterleave, grayscale conversion |
+| `bin/test_calib_archive` | `tests/test_calib_archive.c` | 27 | `calib_archive.c` pack/unpack/list, AGST/AGCZ/AGCAL format, multi-slot AGMS, backward compat, error handling |
+| `bin/test_remap` | `tests/test_remap.c` | 12 | `remap.c` loading `.bin` remap files, from-memory loading, RGB/gray identity and sentinel mapping |
+| `bin/test_binning` | `tests/test_binning.c` | 9 | `imgproc.c` debayer, software binning, deinterleave, Bayer CFA destruction proof, pipeline comparison |
+| `bin/test_calib_load` | `tests/test_calib_load.c` | 9 | `calib_load.c` local-path loading, metadata parsing, error handling |
+| `bin/test_focus` | `tests/test_focus.c` | 10 | `focus.c` score ordering, ROI clamping, known-value Laplacian precision |
+| `bin/test_stereo_common` | `tests/test_stereo_common.c` | 17 | `stereo_common.c` backend parsing, SGBM defaults, JET colorize, depth conversion |
+| `bin/test_imgproc_extra` | `tests/test_imgproc_extra.c` | 18 | `imgproc.c` gamma_lut_2p5, apply_lut_inplace, rgb_to_gray, gray_to_rgb_replicate, roundtrip proof |
+| `bin/test_image` | `tests/test_image.c` | 17 | `image.c` format parsing, PGM write/roundtrip, PNG/JPG magic bytes, DualBayer pair output with binning |
+| `bin/test_calib_load_slot` | `tests/test_calib_load_slot.c` | 10 | `calib_load.c` slot path via mock device: legacy AGST, multi-slot AGMS, error handling |
 
 ### How unit tests link
 
 Tests need Aravis *headers* (because `common.h` includes `<arv.h>`) but do not link against Aravis *libraries*.  This is why pure image-processing functions live in `imgproc.c` -- they can be linked into test binaries independently.
 
 ```
-TEST_CFLAGS = ... $(shell pkg-config --cflags aravis-0.8) -I$(SRCDIR) -I$(VENDORDIR)
-TEST_LIBS   = $(shell pkg-config --libs glib-2.0) -lz -lm
+UNITY_CFLAGS = $(TEST_CFLAGS) -I$(UNITY_DIR) -DUNITY_INCLUDE_DOUBLE
+TEST_LIBS    = $(shell pkg-config --libs glib-2.0) -lz -lm
 ```
 
-Each test binary only links the object files it actually needs:
+Each test binary links `$(UNITY_OBJ)` plus only the object files it actually needs:
 
-- `test_calib_archive` links `remap.o`, `calib_archive.o`, `cJSON.o`
-- `test_remap` links `remap.o`
-- `test_binning` links `imgproc.o`
+- `test_calib_archive` links `remap.o`, `calib_archive.o`, `cJSON.o`, `unity.o`
+- `test_calib_load` links `remap.o`, `calib_archive.o`, `cJSON.o`, `calib_load.o`, `unity.o`
+- `test_remap` links `remap.o`, `unity.o`
+- `test_binning` links `imgproc.o`, `unity.o`
+- `test_focus` links `focus.o`, `unity.o`
+- `test_stereo_common` compiles `stereo_common.c` directly (see note below), links `unity.o`
+- `test_imgproc_extra` links `imgproc.o`, `unity.o`
+- `test_image` links `image.o`, `imgproc.o`, `remap.o`, `unity.o`
+- `test_calib_load_slot` links `calib_load.o`, `remap.o`, `calib_archive.o`, `cJSON.o`, `mock_device_file.o`, `unity.o`
 
-### greatest.h conventions
+### Testing modules with conditional backends
 
-- Each test file defines one or more `SUITE()` blocks containing `RUN_TEST()` calls.
-- `main()` uses `GREATEST_MAIN_BEGIN / GREATEST_MAIN_END` and calls `RUN_SUITE()`.
-- Run a specific suite: `bin/test_binning -s software_bin_destroys_bayer`
-- Run a specific test: `bin/test_binning -t bin2x2_mixes_channels`
-- Verbose output: `bin/test_binning -v`
+`stereo_common.c` contains both pure-logic functions (backend parsing, SGBM defaults, JET colorisation) and backend-dispatching functions guarded by `#ifdef HAVE_OPENCV` / `#ifdef HAVE_ONNXRUNTIME`.  The dispatching functions reference symbols like `ag_sgbm_create` and `ag_onnx_create` that only exist when those optional backends are compiled in.
+
+If the test binary linked the pre-built `stereo_common.o` from the main build, it would inherit whichever `HAVE_*` flags were active at build time -- and the linker would demand the backend libraries just to test pure string parsing and colourmap maths.
+
+The solution is to **recompile the source directly into the test binary** with the backend defines explicitly undefined:
+
+```makefile
+$(BINDIR)/test_stereo_common: $(TESTDIR)/test_stereo_common.c $(SRCDIR)/stereo_common.c \
+                              $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -UHAVE_OPENCV -UHAVE_ONNXRUNTIME -o $@ \
+	      $(TESTDIR)/test_stereo_common.c $(SRCDIR)/stereo_common.c $(UNITY_OBJ) $(TEST_LIBS)
+```
+
+The `-U` flags force both backends off regardless of what `CFLAGS` might set globally.  With both guards disabled, the `ag_disparity_create` / `compute` / `destroy` functions compile to their stub branches (print an error and return `NULL` or `-1`) which reference no external symbols.  The test binary then links cleanly against only glib and zlib.
+
+Use this pattern whenever a module mixes testable pure logic with conditionally-compiled backend code that would otherwise drag in heavy external dependencies.
+
+### Mocking hardware dependencies
+
+Modules that call Aravis camera functions (`device_file.c`, `common.c`) cannot be tested without a camera -- unless the hardware-facing symbols are replaced with mock implementations at link time.
+
+`tests/mock_device_file.c` provides configurable stubs for all `ag_device_file_*` functions.  Test code injects data and return codes before each test:
+
+```c
+#include "mock_device_file.h"
+
+void setUp (void) { mock_device_file_reset (); }
+
+void test_slot_loading (void) {
+    mock_device_file_set_read_data (archive_buf, archive_len);
+    // ... call ag_calib_load with slot >= 0 ...
+    TEST_ASSERT_EQUAL_INT (1, mock_device_file_read_call_count ());
+}
+```
+
+The mock object links in place of `device_file.o`, so the test binary resolves all `ag_device_file_*` symbols without pulling in Aravis.  To add mock support for additional hardware modules, follow the same pattern: create a `tests/mock_<module>.c` with controllable stubs and a corresponding header.
+
+### Unity conventions
+
+- Each test is a `void test_<name> (void)` function -- no return value, passes by reaching the end.
+- `setUp()` and `tearDown()` are called automatically before and after every test.
+- `main()` uses `UNITY_BEGIN()` / `UNITY_END()` and calls `RUN_TEST(test_fn)`.
+- Assertions: `TEST_ASSERT_EQUAL_INT`, `TEST_ASSERT_FLOAT_WITHIN`, `TEST_ASSERT_EQUAL_DOUBLE`, `TEST_ASSERT_EQUAL_MEMORY`, `TEST_ASSERT_NOT_NULL`, `TEST_ASSERT_EQUAL_STRING`, etc.
+- Verbose output: `bin/test_focus -v`
+- Double precision is enabled via `-DUNITY_INCLUDE_DOUBLE` in `UNITY_CFLAGS`.
 
 ### Writing a new unit test
 
-1. Create `tests/test_<name>.c`, include `../vendor/greatest.h` and the header under test.
-2. Add a Makefile rule linking only the needed `.o` files against `TEST_LIBS`.
-3. Add the binary to the `test:` target's prerequisite list and command list.
+1. Create `tests/test_<name>.c`, include `../vendor/unity/unity.h` and the header under test.
+2. Implement `void setUp (void)` and `void tearDown (void)` (can be empty stubs).
+3. Write tests as `void test_<descriptive_name> (void)` functions.
+4. In `main()`, use `UNITY_BEGIN()` / `return UNITY_END()` with `RUN_TEST()` calls.
+5. Add a Makefile rule linking `$(UNITY_OBJ)` and only the needed `.o` files against `TEST_LIBS`.
+6. Add the binary to the `test:` target's prerequisite list and command list.
 
 ## Hardware integration tests
 
