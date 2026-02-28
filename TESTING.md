@@ -24,7 +24,7 @@ All unit tests use the [Unity](https://github.com/ThrowTheSwitch/Unity) framewor
 | `bin/test_remap` | `tests/test_remap.c` | 12 | `remap.c` loading `.bin` remap files, from-memory loading, RGB/gray identity and sentinel mapping |
 | `bin/test_binning` | `tests/test_binning.c` | 9 | `imgproc.c` debayer, software binning, deinterleave, Bayer CFA destruction proof, pipeline comparison |
 | `bin/test_calib_load` | `tests/test_calib_load.c` | 9 | `calib_load.c` local-path loading, metadata parsing, error handling |
-| `bin/test_focus` | `tests/test_focus.c` | 10 | `focus.c` score ordering, ROI clamping, known-value Laplacian precision |
+| `bin/test_focus` | `tests/test_focus.c` | 24 | `focus.c` per-metric score ordering (laplacian, tenengrad, brenner), blur monotonicity, noise sensitivity, ROI clamping, metric string parsing, known-value Laplacian precision |
 | `bin/test_stereo_common` | `tests/test_stereo_common.c` | 17 | `stereo_common.c` backend parsing, SGBM defaults, JET colorize, depth conversion |
 | `bin/test_imgproc_extra` | `tests/test_imgproc_extra.c` | 18 | `imgproc.c` gamma_lut_2p5, apply_lut_inplace, rgb_to_gray, gray_to_rgb_replicate, roundtrip proof |
 | `bin/test_image` | `tests/test_image.c` | 17 | `image.c` format parsing, PGM write/roundtrip, PNG/JPG magic bytes, DualBayer pair output with binning |
