@@ -2,8 +2,8 @@
  * cmd_focus.c — "ag-cam-tools focus" subcommand
  *
  * Continuously captures software-triggered DualBayerRG8 frames, computes
- * a Variance-of-Laplacian focus score for each eye, and displays the
- * live stream with ROI overlay and score readout via SDL2.
+ * a configurable focus score for each eye, and displays the live stream
+ * with ROI overlay and score readout via SDL2.
  */
 
 #include "common.h"
@@ -25,6 +25,7 @@ static volatile sig_atomic_t g_quit = 0;
 #define AG_FOCUS_LOCK_THRESHOLD      0.05f
 #define AG_FOCUS_LOCK_HOLD_SECONDS   1.0
 #define AG_FOCUS_SCORE_AVG_FRAMES    5
+#define AG_FOCUS_LOW_DETAIL_SCORE    5.0
 
 static float
 focus_normalized_delta (double score_left, double score_right)
@@ -52,7 +53,8 @@ focus_loop (const char *device_id, const char *iface_ip,
             gboolean auto_expose, int packet_size, int binning,
             int user_roi_x, int user_roi_y,
             int user_roi_w, int user_roi_h,
-            int roi_specified, gboolean enable_audio)
+            int roi_specified, gboolean enable_audio,
+            AgFocusMetric metric)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -101,6 +103,7 @@ focus_loop (const char *device_id, const char *iface_ip,
 
     printf ("Focus ROI: x=%d y=%d w=%d h=%d (image %ux%u per eye)\n",
             roi_x, roi_y, roi_w, roi_h, proc_sub_w, proc_h);
+    printf ("Focus metric: %s\n", ag_focus_metric_name (metric));
 
     /* SDL2 setup. */
     if (SDL_Init (enable_audio ? (SDL_INIT_VIDEO | SDL_INIT_AUDIO)
@@ -182,6 +185,7 @@ focus_loop (const char *device_id, const char *iface_ip,
 
     guint64 frames_displayed = 0;
     guint64 frames_dropped   = 0;
+    double current_fps       = 0.0;
     const guint8 *gamma_lut  = gamma_lut_2p5 ();
     GTimer *stats_timer  = g_timer_new ();
     GTimer *stdout_timer = g_timer_new ();
@@ -199,6 +203,7 @@ focus_loop (const char *device_id, const char *iface_ip,
     float normalized_delta = 0.0f;
     double lock_stable_seconds = 0.0;
     gboolean focus_locked = FALSE;
+    gboolean low_detail = FALSE;
     gint64 last_frame_time_us = g_get_monotonic_time ();
 
     while (!g_quit) {
@@ -209,6 +214,19 @@ focus_loop (const char *device_id, const char *iface_ip,
             if (ev.type == SDL_KEYDOWN &&
                 (ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q))
                 g_quit = 1;
+            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_m) {
+                metric = (AgFocusMetric) ((metric + 1) % AG_FOCUS_METRIC_COUNT);
+                /* Reset moving-average history for the new metric. */
+                memset (score_history_left, 0, sizeof score_history_left);
+                memset (score_history_right, 0, sizeof score_history_right);
+                score_sum_left = 0.0;
+                score_sum_right = 0.0;
+                score_history_count = 0;
+                score_history_index = 0;
+                lock_stable_seconds = 0.0;
+                focus_locked = FALSE;
+                printf ("\nSwitched metric: %s\n", ag_focus_metric_name (metric));
+            }
         }
         if (g_quit)
             break;
@@ -274,10 +292,10 @@ focus_loop (const char *device_id, const char *iface_ip,
                                  bayer_left, bayer_right);
 
         /* Compute focus scores on raw bayer (before gamma). */
-        raw_score_left = compute_focus_score (bayer_left,
+        raw_score_left = ag_focus_score (metric, bayer_left,
                          (int) proc_sub_w, (int) proc_h,
                          roi_x, roi_y, roi_w, roi_h);
-        raw_score_right = compute_focus_score (bayer_right,
+        raw_score_right = ag_focus_score (metric, bayer_right,
                           (int) proc_sub_w, (int) proc_h,
                           roi_x, roi_y, roi_w, roi_h);
 
@@ -305,7 +323,14 @@ focus_loop (const char *device_id, const char *iface_ip,
             double frame_dt = (double) (now_us - last_frame_time_us) / 1000000.0;
             last_frame_time_us = now_us;
 
-            if (fabsf (normalized_delta) < AG_FOCUS_LOCK_THRESHOLD) {
+            low_detail = (score_left < AG_FOCUS_LOW_DETAIL_SCORE &&
+                          score_right < AG_FOCUS_LOW_DETAIL_SCORE);
+
+            if (low_detail) {
+                /* Both scores too weak — don't treat as locked. */
+                lock_stable_seconds = 0.0;
+                focus_locked = FALSE;
+            } else if (fabsf (normalized_delta) < AG_FOCUS_LOCK_THRESHOLD) {
                 lock_stable_seconds += frame_dt;
                 if (lock_stable_seconds >= AG_FOCUS_LOCK_HOLD_SECONDS)
                     focus_locked = TRUE;
@@ -377,23 +402,30 @@ focus_loop (const char *device_id, const char *iface_ip,
             int line_h = 7 * font_scale + 4;
             char buf[128];
 
+            snprintf (buf, sizeof buf, "metric: %s",
+                      ag_focus_metric_name (metric));
+            ag_font_render (renderer, buf, 8, 8, font_scale, 180, 180, 180);
+
             snprintf (buf, sizeof buf, "left: %.2f", score_left);
-            ag_font_render (renderer, buf, 8, 8, font_scale, 0, 255, 0);
+            ag_font_render (renderer, buf, 8, 8 + line_h, font_scale, 0, 255, 0);
 
             snprintf (buf, sizeof buf, "right: %.2f", score_right);
-            ag_font_render (renderer, buf, 8, 8 + line_h, font_scale, 0, 255, 0);
+            ag_font_render (renderer, buf, 8, 8 + line_h * 2, font_scale, 0, 255, 0);
 
             double delta_pct = fabs ((double) normalized_delta) * 100.0;
             snprintf (buf, sizeof buf, "delta: %.1f%%", delta_pct);
-            ag_font_render (renderer, buf, 8, 8 + line_h * 2, font_scale,
+            ag_font_render (renderer, buf, 8, 8 + line_h * 3, font_scale,
                             delta_pct > (AG_FOCUS_LOCK_THRESHOLD * 100.0) ? 255 : 0,
                             delta_pct > (AG_FOCUS_LOCK_THRESHOLD * 100.0) ? 100 : 255,
                             0);
 
-            snprintf (buf, sizeof buf, "lock: %s", focus_locked ? "LOCKED" : "ALIGNING");
-            ag_font_render (renderer, buf, 8, 8 + line_h * 3, font_scale,
-                            focus_locked ? 0 : 255,
-                            focus_locked ? 255 : 200,
+            const char *state_str = low_detail ? "LOW DETAIL"
+                                  : focus_locked ? "LOCKED"
+                                  : "ALIGNING";
+            snprintf (buf, sizeof buf, "lock: %s", state_str);
+            ag_font_render (renderer, buf, 8, 8 + line_h * 4, font_scale,
+                            low_detail  ? 255 : focus_locked ? 0 : 255,
+                            low_detail  ? 100 : focus_locked ? 255 : 200,
                             0);
         }
 
@@ -401,24 +433,28 @@ focus_loop (const char *device_id, const char *iface_ip,
 
         frames_displayed++;
 
-        /* Print to stdout periodically (~1/second). */
-        double stdout_elapsed = g_timer_elapsed (stdout_timer, NULL);
-        if (stdout_elapsed >= 1.0) {
-            double delta = fabs (score_left - score_right);
-            printf ("left: %.2f  right: %.2f  delta: %.2f\n",
-                    score_left, score_right, delta);
-            g_timer_start (stdout_timer);
-        }
-
-        /* FPS stats every 5 seconds. */
+        /* Update FPS counter every 5 seconds. */
         double elapsed = g_timer_elapsed (stats_timer, NULL);
         if (elapsed >= 5.0) {
-            printf ("  %.1f fps (displayed=%" G_GUINT64_FORMAT
-                    " dropped=%" G_GUINT64_FORMAT ")\n",
-                    frames_displayed / elapsed, frames_displayed, frames_dropped);
+            current_fps = frames_displayed / elapsed;
             frames_displayed = 0;
             frames_dropped = 0;
             g_timer_start (stats_timer);
+        }
+
+        /* Overwrite status line on stdout (~1/second). */
+        double stdout_elapsed = g_timer_elapsed (stdout_timer, NULL);
+        if (stdout_elapsed >= 1.0) {
+            double delta = fabs (score_left - score_right);
+            const char *state = low_detail ? "LOW_DETAIL"
+                              : focus_locked ? "LOCKED"
+                              : "ALIGNING";
+            printf ("\r\033[K[%s] L:%.1f R:%.1f d:%.1f %s  %.0f fps",
+                    ag_focus_metric_name (metric),
+                    score_left, score_right, delta, state,
+                    current_fps);
+            fflush (stdout);
+            g_timer_start (stdout_timer);
         }
 
         g_usleep ((gulong) trigger_interval_us);
@@ -472,14 +508,17 @@ cmd_focus (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "GigE packet size (default: auto-negotiate)");
     struct arg_lit *quiet_audio = arg_lit0 ("q", "quiet-audio",
                                             "disable focus audio feedback");
+    struct arg_str *metric_a  = arg_str0 ("m", "metric",
+                                          "<laplacian|tenengrad|brenner>",
+                                          "focus metric (default: laplacian)");
     struct arg_int *roi_a     = arg_intn (NULL, "roi", "<x y w h>", 0, 4,
                                           "region of interest (default: center 50%%)");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
 
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
-                         gain, auto_exp, binning_a, pkt_size, quiet_audio, roi_a,
-                         help, end };
+                         gain, auto_exp, binning_a, pkt_size, quiet_audio,
+                         metric_a, roi_a, help, end };
 
     int exitcode = EXIT_SUCCESS;
     if (arg_nullcheck (argtable) != 0) {
@@ -544,6 +583,19 @@ cmd_focus (int argc, char *argv[], arg_dstr_t res, void *ctx)
         goto done;
     }
 
+    AgFocusMetric metric = AG_FOCUS_METRIC_LAPLACIAN;
+    if (metric_a->count) {
+        int m = ag_focus_metric_from_string (metric_a->sval[0]);
+        if (m < 0) {
+            arg_dstr_catf (res,
+                "error: unknown metric '%s' (use laplacian, tenengrad, or brenner)\n",
+                metric_a->sval[0]);
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+        metric = (AgFocusMetric) m;
+    }
+
     int roi_specified = 0;
     int uroi_x = 0, uroi_y = 0, uroi_w = 0, uroi_h = 0;
     if (roi_a->count == 4) {
@@ -582,7 +634,7 @@ cmd_focus (int argc, char *argv[], arg_dstr_t res, void *ctx)
     exitcode = focus_loop (device_id, iface_ip, fps, exposure_us, gain_db,
                            do_auto_expose, pkt_sz, binning,
                            uroi_x, uroi_y, uroi_w, uroi_h, roi_specified,
-                           quiet_audio->count == 0);
+                           quiet_audio->count == 0, metric);
     g_free (device_id);
 
 done:
