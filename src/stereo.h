@@ -143,6 +143,27 @@ ag_disparity_to_depth (int16_t disp_q4, double focal_length_px,
 }
 
 /* ------------------------------------------------------------------ */
+/*  Disparity range from depth bounds                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Compute SGBM min_disparity and num_disparities from depth limits.
+ *
+ * z_near_cm / z_far_cm:  working distance range (same units as baseline).
+ * focal_length_px:       rectified focal length in pixels.
+ * baseline_cm:           stereo baseline in cm.
+ * out_min_disparity:     receives computed minimum disparity.
+ * out_num_disparities:   receives computed num_disparities (multiple of 16).
+ *
+ * Returns 0 on success, -1 on invalid input (e.g. z_near <= 0).
+ */
+int ag_disparity_range_from_depth (double z_near_cm, double z_far_cm,
+                                    double focal_length_px,
+                                    double baseline_cm,
+                                    int *out_min_disparity,
+                                    int *out_num_disparities);
+
+/* ------------------------------------------------------------------ */
 /*  Internal: SGBM backend (stereo_sgbm.cpp, extern "C")              */
 /* ------------------------------------------------------------------ */
 

@@ -226,6 +226,69 @@ void test_depth_one_pixel_disparity (void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tests: disparity_range_from_depth                                  */
+/* ------------------------------------------------------------------ */
+
+void test_range_typical_case (void)
+{
+    /* f=875.24, B=4.0677, z_near=30, z_far=200 */
+    int min_d = 0, num_d = 0;
+    int rc = ag_disparity_range_from_depth (30.0, 200.0, 875.24, 4.0677,
+                                             &min_d, &num_d);
+    TEST_ASSERT_EQUAL_INT (0, rc);
+
+    /* d_min = 875.24 * 4.0677 / 200 = ~17.8 → floor → 17 */
+    TEST_ASSERT_EQUAL_INT (17, min_d);
+
+    /* d_max = 875.24 * 4.0677 / 30 = ~118.7 → ceil → 119
+     * range = 119 - 17 = 102, rounded to multiple of 16 → 112 */
+    TEST_ASSERT_EQUAL_INT (112, num_d);
+    TEST_ASSERT_TRUE (num_d % 16 == 0);
+}
+
+void test_range_very_close (void)
+{
+    /* z_near=15cm should produce wider disparity range */
+    int min_d = 0, num_d = 0;
+    int rc = ag_disparity_range_from_depth (15.0, 200.0, 875.24, 4.0677,
+                                             &min_d, &num_d);
+    TEST_ASSERT_EQUAL_INT (0, rc);
+    TEST_ASSERT_TRUE (num_d > 128);  /* wider than default */
+    TEST_ASSERT_TRUE (num_d % 16 == 0);
+}
+
+void test_range_invalid_inputs (void)
+{
+    int min_d = 0, num_d = 0;
+
+    /* z_near >= z_far */
+    TEST_ASSERT_EQUAL_INT (-1, ag_disparity_range_from_depth (
+        200.0, 30.0, 875.0, 4.0, &min_d, &num_d));
+
+    /* zero depth */
+    TEST_ASSERT_EQUAL_INT (-1, ag_disparity_range_from_depth (
+        0.0, 200.0, 875.0, 4.0, &min_d, &num_d));
+
+    /* negative focal length */
+    TEST_ASSERT_EQUAL_INT (-1, ag_disparity_range_from_depth (
+        30.0, 200.0, -1.0, 4.0, &min_d, &num_d));
+
+    /* equal z_near and z_far */
+    TEST_ASSERT_EQUAL_INT (-1, ag_disparity_range_from_depth (
+        30.0, 30.0, 875.0, 4.0, &min_d, &num_d));
+}
+
+void test_range_multiple_of_16 (void)
+{
+    /* Ensure result is always a multiple of 16 */
+    int min_d = 0, num_d = 0;
+    ag_disparity_range_from_depth (25.0, 100.0, 875.24, 4.0677,
+                                    &min_d, &num_d);
+    TEST_ASSERT_TRUE (num_d % 16 == 0);
+    TEST_ASSERT_TRUE (num_d >= 16);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -258,6 +321,12 @@ main (void)
     RUN_TEST (test_depth_zero_disparity);
     RUN_TEST (test_depth_negative_disparity);
     RUN_TEST (test_depth_one_pixel_disparity);
+
+    /* disparity_range_from_depth */
+    RUN_TEST (test_range_typical_case);
+    RUN_TEST (test_range_very_close);
+    RUN_TEST (test_range_invalid_inputs);
+    RUN_TEST (test_range_multiple_of_16);
 
     return UNITY_END ();
 }

@@ -701,6 +701,10 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                                             "override calibration num_disparities");
     struct arg_int *blk_size_a = arg_int0 (NULL, "block-size", "<int>",
                                             "SGBM block size (default: 5)");
+    struct arg_dbl *z_near_a  = arg_dbl0 (NULL, "z-near", "<cm>",
+                                           "near depth limit in cm (computes disparity range)");
+    struct arg_dbl *z_far_a   = arg_dbl0 (NULL, "z-far",  "<cm>",
+                                           "far depth limit in cm (computes disparity range)");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (15);
 
@@ -709,6 +713,7 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                          calib_local, calib_slot,
                          backend_a, model_path_a,
                          min_disp_a, num_disp_a, blk_size_a,
+                         z_near_a, z_far_a,
                          help, end };
 
     int exitcode = EXIT_SUCCESS;
@@ -829,7 +834,37 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
     if (calib_src.local_path)
         ag_calib_load_meta (calib_src.local_path, &meta);
 
-    /* CLI overrides. */
+    /* --z-near / --z-far: compute disparity range from depth bounds.
+     * Requires focal_length_px and baseline_cm from calibration. */
+    if (z_near_a->count || z_far_a->count) {
+        if (meta.focal_length_px <= 0.0 || meta.baseline_cm <= 0.0) {
+            arg_dstr_catf (res, "error: --z-near/--z-far require calibration "
+                           "with focal_length_px and baseline_cm\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+        double zn = z_near_a->count ? z_near_a->dval[0] : 30.0;
+        double zf = z_far_a->count  ? z_far_a->dval[0]  : 200.0;
+        int comp_min = 0, comp_num = 128;
+        if (ag_disparity_range_from_depth (zn, zf, meta.focal_length_px,
+                                            meta.baseline_cm,
+                                            &comp_min, &comp_num) != 0) {
+            arg_dstr_catf (res, "error: invalid --z-near/--z-far values "
+                           "(need 0 < z-near < z-far)\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+        meta.min_disparity   = comp_min;
+        meta.num_disparities = comp_num;
+        printf ("Depth bounds: z-near=%.1f cm  z-far=%.1f cm  "
+                "→ min_disp=%d  num_disp=%d\n",
+                zn, zf, comp_min, comp_num);
+        if (comp_num > 256)
+            printf ("  warning: num_disparities=%d is large — "
+                    "expect slower SGBM compute\n", comp_num);
+    }
+
+    /* CLI overrides (take precedence over --z-near/--z-far). */
     if (min_disp_a->count)  meta.min_disparity  = min_disp_a->ival[0];
     if (num_disp_a->count)  meta.num_disparities = num_disp_a->ival[0];
 
