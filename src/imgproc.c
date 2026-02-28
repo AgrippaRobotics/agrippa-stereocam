@@ -10,6 +10,15 @@
 #include <math.h>
 #include <string.h>
 
+static inline guint8
+gray_bt601_from_rgb (int r, int g, int b)
+{
+    return (guint8) ((77u * (guint) r +
+                      150u * (guint) g +
+                      29u * (guint) b +
+                      128u) >> 8);
+}
+
 /* ================================================================== */
 /*  Gamma / LUT                                                       */
 /* ================================================================== */
@@ -87,6 +96,44 @@ debayer_rg8_to_rgb (const guint8 *bayer, guint8 *rgb,
     }
 }
 
+void
+debayer_rg8_to_gray (const guint8 *bayer, guint8 *gray,
+                     guint width, guint height)
+{
+    for (guint y = 0; y < height; y++) {
+        for (guint x = 0; x < width; x++) {
+#define B(dx, dy) ((int) bayer[ \
+    (guint) CLAMP ((int)(y) + (dy), 0, (int)(height) - 1) * (width) + \
+    (guint) CLAMP ((int)(x) + (dx), 0, (int)(width)  - 1)])
+
+            int r, g, b;
+            int ye = ((y & 1) == 0);
+            int xe = ((x & 1) == 0);
+
+            if (ye && xe) {           /* R pixel */
+                r = B( 0,  0);
+                g = (B(-1, 0) + B(1, 0) + B( 0,-1) + B(0, 1)) / 4;
+                b = (B(-1,-1) + B(1,-1) + B(-1, 1) + B(1, 1)) / 4;
+            } else if (ye && !xe) {   /* G on R row */
+                r = (B(-1, 0) + B(1, 0)) / 2;
+                g = B( 0,  0);
+                b = (B( 0,-1) + B(0, 1)) / 2;
+            } else if (!ye && xe) {   /* G on B row */
+                r = (B( 0,-1) + B(0, 1)) / 2;
+                g = B( 0,  0);
+                b = (B(-1, 0) + B(1, 0)) / 2;
+            } else {                  /* B pixel */
+                r = (B(-1,-1) + B(1,-1) + B(-1, 1) + B(1, 1)) / 4;
+                g = (B(-1, 0) + B(1, 0) + B( 0,-1) + B(0, 1)) / 4;
+                b = B( 0,  0);
+            }
+
+#undef B
+            gray[(size_t) y * width + x] = gray_bt601_from_rgb (r, g, b);
+        }
+    }
+}
+
 /* ================================================================== */
 /*  RGB -> Grayscale (BT.601 luminance)                                */
 /* ================================================================== */
@@ -96,9 +143,7 @@ rgb_to_gray (const guint8 *rgb, guint8 *gray, uint32_t n_pixels)
 {
     for (uint32_t i = 0; i < n_pixels; i++) {
         const guint8 *p = rgb + (size_t) i * 3;
-        /* BT.601:  Y = 0.299 R + 0.587 G + 0.114 B
-         * Fixed-point:  Y = (77 R + 150 G + 29 B + 128) >> 8  */
-        gray[i] = (guint8) ((77u * p[0] + 150u * p[1] + 29u * p[2] + 128u) >> 8);
+        gray[i] = gray_bt601_from_rgb (p[0], p[1], p[2]);
     }
 }
 
@@ -132,6 +177,38 @@ deinterleave_dual_bayer (const guint8 *interleaved, guint width,
         for (guint x = 0; x < sub_w; x++) {
             lrow[x] = row[2 * x];
             rrow[x] = row[2 * x + 1];
+        }
+    }
+}
+
+void
+extract_dual_bayer_eyes (const guint8 *interleaved, guint width,
+                          guint height, int software_binning,
+                          guint8 *left, guint8 *right)
+{
+    guint sub_w = width / 2;
+
+    if (software_binning <= 1) {
+        deinterleave_dual_bayer (interleaved, width, height, left, right);
+        return;
+    }
+
+    guint dst_w = sub_w / 2;
+    guint dst_h = height / 2;
+
+    for (guint y = 0; y < dst_h; y++) {
+        const guint8 *row0 = interleaved + ((size_t) (2 * y) * (size_t) width);
+        const guint8 *row1 = row0 + width;
+        guint8 *lrow = left  + ((size_t) y * (size_t) dst_w);
+        guint8 *rrow = right + ((size_t) y * (size_t) dst_w);
+
+        for (guint x = 0; x < dst_w; x++) {
+            size_t sx = (size_t) x * 4;
+            lrow[x] = (guint8)
+                ((row0[sx] + row0[sx + 2] + row1[sx] + row1[sx + 2]) / 4);
+            rrow[x] = (guint8)
+                ((row0[sx + 1] + row0[sx + 3] +
+                  row1[sx + 1] + row1[sx + 3]) / 4);
         }
     }
 }

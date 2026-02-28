@@ -15,6 +15,7 @@
 
 #include <onnxruntime_c_api.h>
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,12 +55,18 @@ typedef struct {
     float *left_buf;
     float *right_buf;
     size_t buf_elems;       /* 3 * pad_h * pad_w */
+    size_t input_data_size;
+    int64_t input_shape[4];
+    OrtValue *input_tensors[2];
+    const char *input_names[2];
 
     /* Input/output metadata from the model */
     char  *input_name_left;
     char  *input_name_right;
     char **output_names;
     size_t num_outputs;
+    const char *selected_output_name;
+    uint32_t output_stride_w;
 } OnnxHandle;
 
 /* ------------------------------------------------------------------ */
@@ -70,6 +77,54 @@ static uint32_t
 pad32 (uint32_t v)
 {
     return ((v + 31u) / 32u) * 32u;
+}
+
+static void
+pack_gray_to_nchw3_padded (const uint8_t *src,
+                           uint32_t width, uint32_t height,
+                           uint32_t pad_w, uint32_t pad_h,
+                           float *dst)
+{
+    size_t plane = (size_t) pad_h * pad_w;
+    float *dst0 = dst;
+    float *dst1 = dst + plane;
+    float *dst2 = dst + 2 * plane;
+
+    for (uint32_t y = 0; y < height; y++) {
+        const uint8_t *src_row = src + (size_t) y * width;
+        float *row0 = dst0 + (size_t) y * pad_w;
+        float *row1 = dst1 + (size_t) y * pad_w;
+        float *row2 = dst2 + (size_t) y * pad_w;
+
+        for (uint32_t x = 0; x < width; x++) {
+            float v = (float) src_row[x];
+            row0[x] = v;
+            row1[x] = v;
+            row2[x] = v;
+        }
+
+        if (pad_w > width) {
+            float edge = row0[width - 1];
+            for (uint32_t x = width; x < pad_w; x++) {
+                row0[x] = edge;
+                row1[x] = edge;
+                row2[x] = edge;
+            }
+        }
+    }
+
+    if (pad_h > height) {
+        size_t row_bytes = (size_t) pad_w * sizeof (float);
+        float *last0 = dst0 + (size_t) (height - 1) * pad_w;
+        float *last1 = dst1 + (size_t) (height - 1) * pad_w;
+        float *last2 = dst2 + (size_t) (height - 1) * pad_w;
+
+        for (uint32_t y = height; y < pad_h; y++) {
+            memcpy (dst0 + (size_t) y * pad_w, last0, row_bytes);
+            memcpy (dst1 + (size_t) y * pad_w, last1, row_bytes);
+            memcpy (dst2 + (size_t) y * pad_w, last2, row_bytes);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -145,13 +200,10 @@ query_model_names (OnnxHandle *h)
 /*  Warm-up inference                                                  */
 /* ------------------------------------------------------------------ */
 
-static void
+static int
 warmup_inference (OnnxHandle *h)
 {
     const OrtApi *api = h->api;
-
-    int64_t shape[4] = { 1, 3, (int64_t) h->pad_h, (int64_t) h->pad_w };
-    size_t data_size = h->buf_elems * sizeof (float);
 
     /* Fill with mid-grey. */
     for (size_t i = 0; i < h->buf_elems; i++) {
@@ -159,37 +211,16 @@ warmup_inference (OnnxHandle *h)
         h->right_buf[i] = 128.0f;
     }
 
-    OrtValue *inputs[2]  = { NULL, NULL };
-    OrtValue *outputs[1] = { NULL };
-
-    if (check_ort (api,
-            api->CreateTensorWithDataAsOrtValue (
-                h->mem_info, h->left_buf, data_size,
-                shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-                &inputs[0]),
-            "warmup: CreateTensor left"))
-        return;
-
-    if (check_ort (api,
-            api->CreateTensorWithDataAsOrtValue (
-                h->mem_info, h->right_buf, data_size,
-                shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-                &inputs[1]),
-            "warmup: CreateTensor right")) {
-        api->ReleaseValue (inputs[0]);
-        return;
-    }
-
-    const char *input_names[2]  = { h->input_name_left, h->input_name_right };
-    /* Request only the last output for warm-up. */
-    const char *output_names[1] = { h->output_names[h->num_outputs - 1] };
+    OrtValue *output = NULL;
+    const char *output_names[1] = { h->selected_output_name };
 
     struct timespec t0, t1;
     clock_gettime (CLOCK_MONOTONIC, &t0);
 
     OrtStatus *s = api->Run (h->session, NULL,
-                              input_names, (const OrtValue *const *) inputs, 2,
-                              output_names, 1, outputs);
+                              h->input_names,
+                              (const OrtValue *const *) h->input_tensors, 2,
+                              output_names, 1, &output);
 
     clock_gettime (CLOCK_MONOTONIC, &t1);
     double dt = (double) (t1.tv_sec - t0.tv_sec)
@@ -199,13 +230,83 @@ warmup_inference (OnnxHandle *h)
         fprintf (stderr, "onnx: warm-up inference failed: %s\n",
                  api->GetErrorMessage (s));
         api->ReleaseStatus (s);
-    } else {
-        printf ("  warm-up: %.2f s\n", dt);
-        api->ReleaseValue (outputs[0]);
+        return -1;
     }
 
-    api->ReleaseValue (inputs[0]);
-    api->ReleaseValue (inputs[1]);
+    OrtTensorTypeAndShapeInfo *shape_info = NULL;
+    if (check_ort (api,
+            api->GetTensorTypeAndShape (output, &shape_info),
+            "warmup: GetTensorTypeAndShape")) {
+        api->ReleaseValue (output);
+        return -1;
+    }
+
+    size_t ndims = 0;
+    int64_t dims[8] = { 0 };
+
+    if (check_ort (api,
+            api->GetDimensionsCount (shape_info, &ndims),
+            "warmup: GetDimensionsCount")) {
+        api->ReleaseTensorTypeAndShapeInfo (shape_info);
+        api->ReleaseValue (output);
+        return -1;
+    }
+
+    if (ndims < 2 || ndims > 4 || ndims > G_N_ELEMENTS (dims)) {
+        fprintf (stderr, "onnx: unsupported output rank %zu\n", ndims);
+        api->ReleaseTensorTypeAndShapeInfo (shape_info);
+        api->ReleaseValue (output);
+        return -1;
+    }
+
+    if (check_ort (api,
+            api->GetDimensions (shape_info, dims, ndims),
+            "warmup: GetDimensions")) {
+        api->ReleaseTensorTypeAndShapeInfo (shape_info);
+        api->ReleaseValue (output);
+        return -1;
+    }
+
+    int64_t out_h = dims[ndims - 2];
+    int64_t out_w = dims[ndims - 1];
+    if (out_h < (int64_t) h->height || out_w < (int64_t) h->width) {
+        fprintf (stderr, "onnx: output shape too small: %" PRId64 "x%" PRId64 "\n",
+                 out_w, out_h);
+        api->ReleaseTensorTypeAndShapeInfo (shape_info);
+        api->ReleaseValue (output);
+        return -1;
+    }
+
+    h->output_stride_w = (uint32_t) out_w;
+    api->ReleaseTensorTypeAndShapeInfo (shape_info);
+
+    printf ("  warm-up: %.2f s\n", dt);
+    api->ReleaseValue (output);
+    return 0;
+}
+
+static int
+create_input_tensors (OnnxHandle *h)
+{
+    const OrtApi *api = h->api;
+
+    if (check_ort (api,
+            api->CreateTensorWithDataAsOrtValue (
+                h->mem_info, h->left_buf, h->input_data_size,
+                h->input_shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+                &h->input_tensors[0]),
+            "CreateTensor left"))
+        return -1;
+
+    if (check_ort (api,
+            api->CreateTensorWithDataAsOrtValue (
+                h->mem_info, h->right_buf, h->input_data_size,
+                h->input_shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+                &h->input_tensors[1]),
+            "CreateTensor right"))
+        return -1;
+
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -294,11 +395,19 @@ ag_onnx_create (uint32_t width, uint32_t height, const AgOnnxParams *params)
     /* Query model I/O. */
     if (query_model_names (h) != 0)
         goto fail;
+    h->selected_output_name = h->output_names[h->num_outputs - 1];
+    h->input_names[0] = h->input_name_left;
+    h->input_names[1] = h->input_name_right;
 
     /* Allocate NCHW buffers. */
     h->buf_elems = (size_t) 3 * h->pad_h * h->pad_w;
-    h->left_buf  = g_malloc0 (h->buf_elems * sizeof (float));
-    h->right_buf = g_malloc0 (h->buf_elems * sizeof (float));
+    h->input_data_size = h->buf_elems * sizeof (float);
+    h->input_shape[0] = 1;
+    h->input_shape[1] = 3;
+    h->input_shape[2] = (int64_t) h->pad_h;
+    h->input_shape[3] = (int64_t) h->pad_w;
+    h->left_buf  = g_malloc0 (h->input_data_size);
+    h->right_buf = g_malloc0 (h->input_data_size);
 
     /* Memory info for CPU tensors. */
     if (check_ort (api,
@@ -307,8 +416,12 @@ ag_onnx_create (uint32_t width, uint32_t height, const AgOnnxParams *params)
             "CreateCpuMemoryInfo"))
         goto fail;
 
+    if (create_input_tensors (h) != 0)
+        goto fail;
+
     /* Warm-up inference (first pass triggers JIT, allocation, etc.). */
-    warmup_inference (h);
+    if (warmup_inference (h) != 0)
+        goto fail;
 
     return h;
 
@@ -329,152 +442,37 @@ ag_onnx_compute (void *onnx_ptr, uint32_t width, uint32_t height,
     OnnxHandle *h = (OnnxHandle *) onnx_ptr;
     const OrtApi *api = h->api;
 
-    /*
-     * 1. Convert uint8 grayscale → float32 [0,255], replicate to 3 channels,
-     *    write into pre-allocated NCHW buffers with edge-replication padding.
-     */
-    size_t plane = (size_t) h->pad_h * h->pad_w;
+    pack_gray_to_nchw3_padded (left, width, height,
+                               h->pad_w, h->pad_h, h->left_buf);
+    pack_gray_to_nchw3_padded (right, width, height,
+                               h->pad_w, h->pad_h, h->right_buf);
 
-    /* Fill the valid image region (all 3 channels identical). */
-    for (uint32_t y = 0; y < height; y++) {
-        for (uint32_t x = 0; x < width; x++) {
-            float lv = (float) left [y * width + x];
-            float rv = (float) right[y * width + x];
-            size_t off = (size_t) y * h->pad_w + x;
-            h->left_buf [off]             = lv;
-            h->left_buf [plane + off]     = lv;
-            h->left_buf [2 * plane + off] = lv;
-            h->right_buf[off]             = rv;
-            h->right_buf[plane + off]     = rv;
-            h->right_buf[2 * plane + off] = rv;
-        }
-    }
-
-    /* Edge-replicate right margin. */
-    if (h->pad_w > width) {
-        for (uint32_t y = 0; y < height; y++) {
-            float lv = (float) left [y * width + (width - 1)];
-            float rv = (float) right[y * width + (width - 1)];
-            for (uint32_t x = width; x < h->pad_w; x++) {
-                size_t off = (size_t) y * h->pad_w + x;
-                h->left_buf [off]             = lv;
-                h->left_buf [plane + off]     = lv;
-                h->left_buf [2 * plane + off] = lv;
-                h->right_buf[off]             = rv;
-                h->right_buf[plane + off]     = rv;
-                h->right_buf[2 * plane + off] = rv;
-            }
-        }
-    }
-
-    /* Edge-replicate bottom margin. */
-    if (h->pad_h > height) {
-        for (uint32_t y = height; y < h->pad_h; y++) {
-            for (uint32_t x = 0; x < h->pad_w; x++) {
-                uint32_t src_x = x < width ? x : (width - 1);
-                float lv = (float) left [(height - 1) * width + src_x];
-                float rv = (float) right[(height - 1) * width + src_x];
-                size_t off = (size_t) y * h->pad_w + x;
-                h->left_buf [off]             = lv;
-                h->left_buf [plane + off]     = lv;
-                h->left_buf [2 * plane + off] = lv;
-                h->right_buf[off]             = rv;
-                h->right_buf[plane + off]     = rv;
-                h->right_buf[2 * plane + off] = rv;
-            }
-        }
-    }
-
-    /*
-     * 2. Create ORT tensors wrapping our buffers (zero-copy).
-     */
-    int64_t shape[4] = { 1, 3, (int64_t) h->pad_h, (int64_t) h->pad_w };
-    size_t data_size = h->buf_elems * sizeof (float);
-
-    OrtValue *inputs[2]  = { NULL, NULL };
-
-    if (check_ort (api,
-            api->CreateTensorWithDataAsOrtValue (
-                h->mem_info, h->left_buf, data_size,
-                shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-                &inputs[0]),
-            "CreateTensor left"))
-        return -1;
-
-    if (check_ort (api,
-            api->CreateTensorWithDataAsOrtValue (
-                h->mem_info, h->right_buf, data_size,
-                shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-                &inputs[1]),
-            "CreateTensor right")) {
-        api->ReleaseValue (inputs[0]);
-        return -1;
-    }
-
-    /*
-     * 3. Run inference.  Request all outputs — we'll read the last one.
-     */
-    OrtValue **outputs = g_malloc0 (h->num_outputs * sizeof (OrtValue *));
-
-    const char *input_names[2] = { h->input_name_left, h->input_name_right };
+    OrtValue *output = NULL;
+    const char *output_names[1] = { h->selected_output_name };
 
     OrtStatus *s = api->Run (h->session, NULL,
-                              input_names,
-                              (const OrtValue *const *) inputs, 2,
-                              (const char *const *) h->output_names,
-                              h->num_outputs, outputs);
-
-    api->ReleaseValue (inputs[0]);
-    api->ReleaseValue (inputs[1]);
+                              h->input_names,
+                              (const OrtValue *const *) h->input_tensors, 2,
+                              output_names, 1, &output);
 
     if (s != NULL) {
         fprintf (stderr, "onnx: Run failed: %s\n", api->GetErrorMessage (s));
         api->ReleaseStatus (s);
-        g_free (outputs);
         return -1;
     }
-
-    /*
-     * 4. Read last output tensor, crop to original dims, convert to Q4.4.
-     */
-    OrtValue *last_output = outputs[h->num_outputs - 1];
 
     float *out_data = NULL;
     if (check_ort (api,
-            api->GetTensorMutableData (last_output, (void **) &out_data),
+            api->GetTensorMutableData (output, (void **) &out_data),
             "GetTensorMutableData")) {
-        for (size_t i = 0; i < h->num_outputs; i++)
-            api->ReleaseValue (outputs[i]);
-        g_free (outputs);
+        api->ReleaseValue (output);
         return -1;
-    }
-
-    /*
-     * Output shape may be [1, 1, pad_h, pad_w], [1, pad_h, pad_w],
-     * or [pad_h, pad_w].  We need to find where the spatial (pad_h, pad_w)
-     * data starts.  Query the shape to determine the offset.
-     */
-    OrtTensorTypeAndShapeInfo *shape_info = NULL;
-    size_t spatial_offset = 0;
-
-    if (api->GetTensorTypeAndShape (last_output, &shape_info) == NULL) {
-        size_t ndims = 0;
-        (void) api->GetDimensionsCount (shape_info, &ndims);
-        if (ndims == 4) {
-            /* [1, 1, H, W] or [1, C, H, W] — data starts at beginning. */
-            spatial_offset = 0;
-        } else if (ndims == 3) {
-            /* [1, H, W] — data starts at beginning. */
-            spatial_offset = 0;
-        }
-        /* ndims == 2: [H, W] — also offset 0. */
-        api->ReleaseTensorTypeAndShapeInfo (shape_info);
     }
 
     /* Crop and convert to Q4.4. */
     for (uint32_t y = 0; y < height; y++) {
         for (uint32_t x = 0; x < width; x++) {
-            float d = out_data[spatial_offset + (size_t) y * h->pad_w + x];
+            float d = out_data[(size_t) y * h->output_stride_w + x];
             float q4 = d * 16.0f;
             if (q4 > 32767.0f)  q4 = 32767.0f;
             if (q4 < -32768.0f) q4 = -32768.0f;
@@ -482,13 +480,7 @@ ag_onnx_compute (void *onnx_ptr, uint32_t width, uint32_t height,
         }
     }
 
-    /*
-     * 5. Release output values.
-     */
-    for (size_t i = 0; i < h->num_outputs; i++)
-        api->ReleaseValue (outputs[i]);
-    g_free (outputs);
-
+    api->ReleaseValue (output);
     return 0;
 }
 
@@ -503,6 +495,10 @@ ag_onnx_destroy (void *onnx_ptr)
     if (!h)
         return;
 
+    if (h->input_tensors[0])
+        h->api->ReleaseValue (h->input_tensors[0]);
+    if (h->input_tensors[1])
+        h->api->ReleaseValue (h->input_tensors[1]);
     if (h->session)
         h->api->ReleaseSession (h->session);
     if (h->opts)

@@ -237,8 +237,6 @@ stream_loop (const char *device_id, const char *iface_ip,
     /* Scratch buffers. */
     guint8 *rgb_left        = g_malloc ((size_t) proc_sub_w * proc_h * 3);
     guint8 *rgb_right       = g_malloc ((size_t) proc_sub_w * proc_h * 3);
-    guint8 *bayer_left_src  = g_malloc ((size_t) src_sub_w  * src_h);
-    guint8 *bayer_right_src = g_malloc ((size_t) src_sub_w  * src_h);
     guint8 *bayer_left      = g_malloc ((size_t) proc_sub_w * proc_h);
     guint8 *bayer_right     = g_malloc ((size_t) proc_sub_w * proc_h);
 
@@ -362,18 +360,8 @@ stream_loop (const char *device_id, const char *iface_ip,
             continue;
         }
 
-        /* Deinterleave DualBayer. */
-        deinterleave_dual_bayer (data, w, h, bayer_left_src, bayer_right_src);
-
-        if (cfg.software_binning > 1) {
-            software_bin_2x2 (bayer_left_src,  src_sub_w, src_h,
-                              bayer_left,  proc_sub_w, proc_h);
-            software_bin_2x2 (bayer_right_src, src_sub_w, src_h,
-                              bayer_right, proc_sub_w, proc_h);
-        } else {
-            memcpy (bayer_left,  bayer_left_src,  (size_t) src_sub_w * src_h);
-            memcpy (bayer_right, bayer_right_src, (size_t) src_sub_w * src_h);
-        }
+        extract_dual_bayer_eyes (data, w, h, cfg.software_binning,
+                                 bayer_left, bayer_right);
 
 #ifdef HAVE_APRILTAG
         /* Detect tags on raw grayscale (before gamma), both eyes. */
@@ -498,8 +486,6 @@ cleanup:
     g_free (rect_right);
     ag_remap_table_free (remap_left);
     ag_remap_table_free (remap_right);
-    g_free (bayer_left_src);
-    g_free (bayer_right_src);
     g_free (bayer_left);
     g_free (bayer_right);
     g_free (rgb_left);

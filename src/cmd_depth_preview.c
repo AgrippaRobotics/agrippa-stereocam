@@ -246,19 +246,14 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     size_t eye_pixels = (size_t) proc_sub_w * proc_h;
     size_t eye_rgb    = eye_pixels * 3;
 
-    guint8 *bayer_left_src  = g_malloc (src_sub_w * src_h);
-    guint8 *bayer_right_src = g_malloc (src_sub_w * src_h);
     guint8 *bayer_left      = g_malloc (eye_pixels);
     guint8 *bayer_right     = g_malloc (eye_pixels);
 
     /* Display path: gamma → debayer → remap RGB. */
     guint8 *rgb_left   = g_malloc (eye_rgb);
-    guint8 *rgb_right  = g_malloc (eye_rgb);
     guint8 *rect_rgb_l = g_malloc (eye_rgb);
 
-    /* Disparity path: debayer (no gamma) → rgb_to_gray → remap gray. */
-    guint8 *rgb_nogamma_l = g_malloc (eye_rgb);
-    guint8 *rgb_nogamma_r = g_malloc (eye_rgb);
+    /* Disparity path: debayer to luma (no gamma) → remap gray. */
     guint8 *gray_left     = g_malloc (eye_pixels);
     guint8 *gray_right    = g_malloc (eye_pixels);
     guint8 *rect_gray_l   = g_malloc (eye_pixels);
@@ -519,25 +514,13 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
             continue;
         }
 
-        /* Deinterleave DualBayer. */
-        deinterleave_dual_bayer (data, w, h, bayer_left_src, bayer_right_src);
-
-        if (cfg.software_binning > 1) {
-            software_bin_2x2 (bayer_left_src,  src_sub_w, src_h,
-                              bayer_left,  proc_sub_w, proc_h);
-            software_bin_2x2 (bayer_right_src, src_sub_w, src_h,
-                              bayer_right, proc_sub_w, proc_h);
-        } else {
-            memcpy (bayer_left,  bayer_left_src,  src_sub_w * src_h);
-            memcpy (bayer_right, bayer_right_src, src_sub_w * src_h);
-        }
+        extract_dual_bayer_eyes (data, w, h, cfg.software_binning,
+                                 bayer_left, bayer_right);
 
         /* ---- Disparity path (pre-gamma for better matching) ---- */
         if (cfg.data_is_bayer) {
-            debayer_rg8_to_rgb (bayer_left,  rgb_nogamma_l, proc_sub_w, proc_h);
-            debayer_rg8_to_rgb (bayer_right, rgb_nogamma_r, proc_sub_w, proc_h);
-            rgb_to_gray (rgb_nogamma_l, gray_left,  (uint32_t) eye_pixels);
-            rgb_to_gray (rgb_nogamma_r, gray_right, (uint32_t) eye_pixels);
+            debayer_rg8_to_gray (bayer_left,  gray_left,  proc_sub_w, proc_h);
+            debayer_rg8_to_gray (bayer_right, gray_right, proc_sub_w, proc_h);
         } else {
             /* Binned data is already grayscale-like — use directly. */
             memcpy (gray_left,  bayer_left,  eye_pixels);
@@ -656,13 +639,8 @@ cleanup_sdl:
     g_free (rect_gray_l);
     g_free (gray_right);
     g_free (gray_left);
-    g_free (rgb_nogamma_r);
-    g_free (rgb_nogamma_l);
     g_free (rect_rgb_l);
-    g_free (rgb_right);
     g_free (rgb_left);
-    g_free (bayer_left_src);
-    g_free (bayer_right_src);
     g_free (bayer_left);
     g_free (bayer_right);
     SDL_DestroyTexture (texture);

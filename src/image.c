@@ -158,44 +158,26 @@ write_dual_bayer_pair (const char *output_dir,
     }
 
     guint src_sub_w = width / 2;
-    size_t src_sub_n = (size_t) src_sub_w * (size_t) height;
-    guint8 *left_src  = g_malloc (src_sub_n);
-    guint8 *right_src = g_malloc (src_sub_n);
-    if (!left_src || !right_src) {
-        g_free (left_src);
-        g_free (right_src);
-        fprintf (stderr, "error: out of memory while splitting DualBayer frame\n");
-        return EXIT_FAILURE;
-    }
-
-    deinterleave_dual_bayer (interleaved, width, height, left_src, right_src);
-
     guint dst_w = src_sub_w;
     guint dst_h = height;
-    guint8 *left  = left_src;
-    guint8 *right = right_src;
-    guint8 *left_bin  = NULL;
-    guint8 *right_bin = NULL;
 
     if (software_binning > 1) {
         dst_w = src_sub_w / 2;
         dst_h = height / 2;
-        size_t dst_n = (size_t) dst_w * (size_t) dst_h;
-        left_bin  = g_malloc (dst_n);
-        right_bin = g_malloc (dst_n);
-        if (!left_bin || !right_bin) {
-            g_free (left_bin);
-            g_free (right_bin);
-            g_free (left_src);
-            g_free (right_src);
-            fprintf (stderr, "error: out of memory while software-binning\n");
-            return EXIT_FAILURE;
-        }
-        software_bin_2x2 (left_src,  src_sub_w, height, left_bin,  dst_w, dst_h);
-        software_bin_2x2 (right_src, src_sub_w, height, right_bin, dst_w, dst_h);
-        left  = left_bin;
-        right = right_bin;
     }
+
+    size_t eye_n = (size_t) dst_w * (size_t) dst_h;
+    guint8 *left  = g_malloc (eye_n);
+    guint8 *right = g_malloc (eye_n);
+    if (!left || !right) {
+        g_free (left);
+        g_free (right);
+        fprintf (stderr, "error: out of memory while extracting DualBayer frame\n");
+        return EXIT_FAILURE;
+    }
+
+    extract_dual_bayer_eyes (interleaved, width, height, software_binning,
+                             left, right);
 
     const char *ext = (enc == AG_ENC_PNG) ? "png"
                     : (enc == AG_ENC_JPG) ? "jpg" : "pgm";
@@ -208,8 +190,6 @@ write_dual_bayer_pair (const char *output_dir,
 
     if (remap_left && remap_right) {
         /* Rectified path: gamma -> debayer/expand -> remap -> encode. */
-        size_t eye_n = (size_t) dst_w * (size_t) dst_h;
-
         apply_lut_inplace (left,  eye_n, gamma_lut_2p5 ());
         apply_lut_inplace (right, eye_n, gamma_lut_2p5 ());
 
@@ -219,16 +199,11 @@ write_dual_bayer_pair (const char *output_dir,
             guint8 *rect_r = g_malloc (eye_n);
 
             if (data_is_bayer) {
-                /* Debayer to RGB, convert to gray, then remap gray. */
-                guint8 *rgb_tmp = g_malloc (eye_n * 3);
                 guint8 *gray_l  = g_malloc (eye_n);
                 guint8 *gray_r  = g_malloc (eye_n);
 
-                debayer_rg8_to_rgb (left,  rgb_tmp, dst_w, dst_h);
-                rgb_to_gray (rgb_tmp, gray_l, (uint32_t) eye_n);
-                debayer_rg8_to_rgb (right, rgb_tmp, dst_w, dst_h);
-                rgb_to_gray (rgb_tmp, gray_r, (uint32_t) eye_n);
-                g_free (rgb_tmp);
+                debayer_rg8_to_gray (left,  gray_l, dst_w, dst_h);
+                debayer_rg8_to_gray (right, gray_r, dst_w, dst_h);
 
                 ag_remap_gray (remap_left,  gray_l, rect_l);
                 ag_remap_gray (remap_right, gray_r, rect_r);
@@ -291,10 +266,8 @@ write_dual_bayer_pair (const char *output_dir,
     g_free (right_name);
     g_free (left_path);
     g_free (right_path);
-    g_free (left_bin);
-    g_free (right_bin);
-    g_free (left_src);
-    g_free (right_src);
+    g_free (left);
+    g_free (right);
 
     return (rc_left == EXIT_SUCCESS && rc_right == EXIT_SUCCESS)
            ? EXIT_SUCCESS : EXIT_FAILURE;

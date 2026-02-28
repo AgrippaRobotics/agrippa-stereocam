@@ -3,7 +3,7 @@
  *                         by test_binning.c
  *
  * Covers: gamma_lut_2p5, apply_lut_inplace, rgb_to_gray (direct),
- *         gray_to_rgb_replicate.
+ *         gray_to_rgb_replicate, debayer_rg8_to_gray, extract_dual_bayer_eyes.
  *
  * No camera hardware is required.
  *
@@ -208,6 +208,68 @@ void test_multi_pixel_conversion (void)
     TEST_ASSERT_EQUAL_UINT8 (29,  gray[2]);
 }
 
+void test_debayer_to_gray_matches_rgb_roundtrip (void)
+{
+    enum { W = 4, H = 4, N = W * H };
+    guint8 bayer[N] = {
+        10, 20, 30, 40,
+        50, 60, 70, 80,
+        90, 100, 110, 120,
+        130, 140, 150, 160
+    };
+    guint8 rgb[N * 3];
+    guint8 gray_from_rgb[N];
+    guint8 gray_direct[N];
+
+    debayer_rg8_to_rgb (bayer, rgb, W, H);
+    rgb_to_gray (rgb, gray_from_rgb, N);
+    debayer_rg8_to_gray (bayer, gray_direct, W, H);
+
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (gray_from_rgb, gray_direct, N);
+}
+
+void test_extract_dual_bayer_eyes_matches_deinterleave (void)
+{
+    enum { FULL_W = 8, H = 4, SUB_W = FULL_W / 2 };
+    guint8 interleaved[FULL_W * H];
+    guint8 left_expected[SUB_W * H];
+    guint8 right_expected[SUB_W * H];
+    guint8 left_actual[SUB_W * H];
+    guint8 right_actual[SUB_W * H];
+
+    for (int i = 0; i < FULL_W * H; i++)
+        interleaved[i] = (guint8) i;
+
+    deinterleave_dual_bayer (interleaved, FULL_W, H, left_expected, right_expected);
+    extract_dual_bayer_eyes (interleaved, FULL_W, H, 1, left_actual, right_actual);
+
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (left_expected, left_actual, SUB_W * H);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (right_expected, right_actual, SUB_W * H);
+}
+
+void test_extract_dual_bayer_eyes_matches_bin2x2_pipeline (void)
+{
+    enum { FULL_W = 8, H = 4, SUB_W = FULL_W / 2, BIN_W = SUB_W / 2, BIN_H = H / 2 };
+    guint8 interleaved[FULL_W * H];
+    guint8 left_split[SUB_W * H];
+    guint8 right_split[SUB_W * H];
+    guint8 left_expected[BIN_W * BIN_H];
+    guint8 right_expected[BIN_W * BIN_H];
+    guint8 left_actual[BIN_W * BIN_H];
+    guint8 right_actual[BIN_W * BIN_H];
+
+    for (int i = 0; i < FULL_W * H; i++)
+        interleaved[i] = (guint8) (255 - i);
+
+    deinterleave_dual_bayer (interleaved, FULL_W, H, left_split, right_split);
+    software_bin_2x2 (left_split, SUB_W, H, left_expected, BIN_W, BIN_H);
+    software_bin_2x2 (right_split, SUB_W, H, right_expected, BIN_W, BIN_H);
+    extract_dual_bayer_eyes (interleaved, FULL_W, H, 2, left_actual, right_actual);
+
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (left_expected, left_actual, BIN_W * BIN_H);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (right_expected, right_actual, BIN_W * BIN_H);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main                                                               */
 /* ------------------------------------------------------------------ */
@@ -240,6 +302,9 @@ main (void)
     RUN_TEST (test_replicate_max);
     RUN_TEST (test_replicate_roundtrip);
     RUN_TEST (test_multi_pixel_conversion);
+    RUN_TEST (test_debayer_to_gray_matches_rgb_roundtrip);
+    RUN_TEST (test_extract_dual_bayer_eyes_matches_deinterleave);
+    RUN_TEST (test_extract_dual_bayer_eyes_matches_bin2x2_pipeline);
 
     return UNITY_END ();
 }

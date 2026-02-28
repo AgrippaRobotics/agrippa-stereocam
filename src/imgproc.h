@@ -20,6 +20,8 @@ void apply_lut_inplace (guint8 *data, size_t n, const guint8 lut[256]);
 
 void debayer_rg8_to_rgb (const guint8 *bayer, guint8 *rgb,
                           guint width, guint height);
+void debayer_rg8_to_gray (const guint8 *bayer, guint8 *gray,
+                           guint width, guint height);
 
 /* --- RGB -> Grayscale (BT.601 luminance) --- */
 
@@ -34,6 +36,9 @@ void gray_to_rgb_replicate (const guint8 *gray, guint8 *rgb,
 
 void deinterleave_dual_bayer (const guint8 *interleaved, guint width,
                                guint height, guint8 *left, guint8 *right);
+void extract_dual_bayer_eyes (const guint8 *interleaved, guint width,
+                               guint height, int software_binning,
+                               guint8 *left, guint8 *right);
 void software_bin_2x2 (const guint8 *src, guint src_w, guint src_h,
                         guint8 *dst, guint dst_w, guint dst_h);
 
