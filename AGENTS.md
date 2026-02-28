@@ -1,5 +1,8 @@
 # Agent Guidance
 
+## Line endings
+This repository has no Windows support!(just macos and linux) there should never be a CRLF line ending in any file, so dont write them.
+
 ## Documentation System
 
 This repository uses a dedicated documentation system instead of treating the root `README.md` as the full manual.
