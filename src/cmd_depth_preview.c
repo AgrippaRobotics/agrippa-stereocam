@@ -8,6 +8,7 @@
 
 #include "common.h"
 #include "calib_load.h"
+#include "disparity_filter.h"
 #include "font.h"
 #include "remap.h"
 #include "stereo.h"
@@ -108,6 +109,25 @@ print_sgbm_controls (void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Post-processing options                                            */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    /* Specular masking (#12). */
+    gboolean specular_mask;
+    uint8_t  specular_threshold;   /* 0-255, recommended 250 */
+    int      specular_radius;      /* dilation radius, recommended 2 */
+
+    /* Median filter (#13). */
+    int      median_kernel;        /* 0=off, 3 or 5 recommended */
+
+    /* Morphological cleanup (#13). */
+    gboolean morph_cleanup;
+    int      morph_close_radius;   /* recommended 1-2 */
+    int      morph_open_radius;    /* recommended 1-2 */
+} AgPostProcOpts;
+
+/* ------------------------------------------------------------------ */
 /*  Depth preview loop                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -117,7 +137,8 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                     gboolean auto_expose, int packet_size, int binning,
                     const AgCalibSource *calib_src, AgStereoBackend backend,
                     AgSgbmParams *sgbm_params, const AgOnnxParams *onnx_params,
-                    gboolean enable_runtime_tuning)
+                    gboolean enable_runtime_tuning,
+                    const AgPostProcOpts *postproc)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -259,9 +280,10 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     guint8 *rect_gray_l   = g_malloc (eye_pixels);
     guint8 *rect_gray_r   = g_malloc (eye_pixels);
 
-    /* Disparity output. */
-    int16_t *disparity_buf = g_malloc (eye_pixels * sizeof (int16_t));
-    guint8  *disparity_rgb = g_malloc (eye_rgb);
+    /* Disparity output + scratch for post-processing. */
+    int16_t *disparity_buf     = g_malloc (eye_pixels * sizeof (int16_t));
+    int16_t *disparity_scratch = g_malloc (eye_pixels * sizeof (int16_t));
+    guint8  *disparity_rgb     = g_malloc (eye_rgb);
 
     /* Start acquisition. */
     printf ("Starting acquisition at %.1f Hz...\n", fps);
@@ -533,6 +555,33 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                                              rect_gray_l, rect_gray_r,
                                              disparity_buf);
 
+        /* ---- Post-processing chain ---- */
+        if (disp_ok == 0) {
+            /* 1. Specular masking (invalidate saturated regions). */
+            if (postproc->specular_mask)
+                ag_disparity_mask_specular (disparity_buf,
+                                            rect_gray_l, rect_gray_r,
+                                            proc_sub_w, proc_h,
+                                            postproc->specular_threshold,
+                                            postproc->specular_radius);
+
+            /* 2. Median filter (remove salt-and-pepper noise). */
+            if (postproc->median_kernel >= 3) {
+                ag_disparity_median_filter (disparity_buf, disparity_scratch,
+                                            proc_sub_w, proc_h,
+                                            postproc->median_kernel);
+                memcpy (disparity_buf, disparity_scratch,
+                        eye_pixels * sizeof (int16_t));
+            }
+
+            /* 3. Morphological cleanup (fill small holes, remove bumps). */
+            if (postproc->morph_cleanup)
+                ag_disparity_morph_cleanup (disparity_buf,
+                                            proc_sub_w, proc_h,
+                                            postproc->morph_close_radius,
+                                            postproc->morph_open_radius);
+        }
+
         ag_disparity_colorize (disparity_buf, proc_sub_w, proc_h,
                                sgbm_params->min_disparity,
                                sgbm_params->num_disparities,
@@ -634,6 +683,7 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
 
 cleanup_sdl:
     g_free (disparity_rgb);
+    g_free (disparity_scratch);
     g_free (disparity_buf);
     g_free (rect_gray_r);
     g_free (rect_gray_l);
@@ -705,8 +755,17 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                                            "near depth limit in cm (computes disparity range)");
     struct arg_dbl *z_far_a   = arg_dbl0 (NULL, "z-far",  "<cm>",
                                            "far depth limit in cm (computes disparity range)");
+    /* Post-processing flags. */
+    struct arg_lit *mask_spec  = arg_lit0 (NULL, "mask-specular",
+                                           "invalidate disparity at specular highlights");
+    struct arg_int *spec_thresh = arg_int0 (NULL, "specular-threshold", "<0-255>",
+                                             "pixel brightness for specular detection (default: 250)");
+    struct arg_int *median_a   = arg_int0 (NULL, "median-filter", "<kernel>",
+                                            "median filter kernel size (3 or 5, default: off)");
+    struct arg_lit *morph_a    = arg_lit0 (NULL, "morph-cleanup",
+                                           "morphological close+open on disparity");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
-    struct arg_end *end       = arg_end (15);
+    struct arg_end *end       = arg_end (20);
 
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
                          gain, auto_exp, binning_a, pkt_size,
@@ -714,6 +773,7 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                          backend_a, model_path_a,
                          min_disp_a, num_disp_a, blk_size_a,
                          z_near_a, z_far_a,
+                         mask_spec, spec_thresh, median_a, morph_a,
                          help, end };
 
     int exitcode = EXIT_SUCCESS;
@@ -919,12 +979,23 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
 
     int pkt_sz = pkt_size->count ? pkt_size->ival[0] : 0;
 
+    /* Build post-processing options from CLI flags. */
+    AgPostProcOpts postproc = {0};
+    postproc.specular_mask      = mask_spec->count > 0;
+    postproc.specular_threshold = spec_thresh->count ? (uint8_t) spec_thresh->ival[0] : 250;
+    postproc.specular_radius    = 2;
+    postproc.median_kernel      = median_a->count ? median_a->ival[0] : 0;
+    postproc.morph_cleanup      = morph_a->count > 0;
+    postproc.morph_close_radius = 1;
+    postproc.morph_open_radius  = 1;
+
     exitcode = depth_preview_loop (device_id, iface_ip, fps,
                                     exposure_us, gain_db,
                                     do_auto_expose, pkt_sz, binning,
                                     &calib_src, backend,
                                     &sgbm_params, &onnx_params,
-                                    enable_runtime_tuning);
+                                    enable_runtime_tuning,
+                                    &postproc);
     g_free (device_id);
 
 done:
