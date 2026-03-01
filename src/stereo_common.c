@@ -7,6 +7,7 @@
 
 #include "stereo.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -209,6 +210,18 @@ ag_disparity_update_sgbm_params (AgDisparityContext *ctx,
     return -1;
 }
 
+void *
+ag_disparity_get_sgbm_handle (AgDisparityContext *ctx)
+{
+    if (!ctx)
+        return NULL;
+#ifdef HAVE_OPENCV
+    if (ctx->backend == AG_STEREO_SGBM)
+        return ctx->u.sgbm.sgbm_ptr;
+#endif
+    return NULL;
+}
+
 void
 ag_disparity_destroy (AgDisparityContext *ctx)
 {
@@ -236,6 +249,39 @@ ag_disparity_destroy (AgDisparityContext *ctx)
     }
 
     g_free (ctx);
+}
+
+/* ================================================================== */
+/*  Disparity range from depth bounds                                  */
+/* ================================================================== */
+
+int
+ag_disparity_range_from_depth (double z_near_cm, double z_far_cm,
+                                double focal_length_px,
+                                double baseline_cm,
+                                int *out_min_disparity,
+                                int *out_num_disparities)
+{
+    if (z_near_cm <= 0.0 || z_far_cm <= 0.0 ||
+        z_near_cm >= z_far_cm ||
+        focal_length_px <= 0.0 || baseline_cm <= 0.0)
+        return -1;
+
+    /* disparity = f * B / z.  Close objects → high disparity. */
+    double d_max = focal_length_px * baseline_cm / z_near_cm;
+    double d_min = focal_length_px * baseline_cm / z_far_cm;
+
+    int min_disp  = (int) floor (d_min);
+    int range     = (int) ceil (d_max) - min_disp;
+
+    /* Round up to next multiple of 16 (SGBM requirement). */
+    if (range < 16)
+        range = 16;
+    range = ((range + 15) / 16) * 16;
+
+    *out_min_disparity   = min_disp;
+    *out_num_disparities = range;
+    return 0;
 }
 
 /* ================================================================== */

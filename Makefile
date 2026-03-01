@@ -27,6 +27,9 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/cmd_calibration_capture.c \
        $(SRCDIR)/remap.c \
        $(SRCDIR)/stereo_common.c \
+       $(SRCDIR)/disparity_filter.c \
+       $(SRCDIR)/temporal_filter.c \
+       $(SRCDIR)/confidence.c \
        $(SRCDIR)/cmd_depth_preview.c \
        $(SRCDIR)/device_file.c \
        $(SRCDIR)/calib_archive.c \
@@ -210,13 +213,26 @@ $(BINDIR)/test_calib_load_slot: $(TESTDIR)/test_calib_load_slot.c $(TEST_OBJS) \
 	$(CC) $(UNITY_CFLAGS) -I$(TESTDIR) -o $@ $< $(TEST_OBJS) $(BINDIR)/calib_load.o \
 	      $(MOCK_DEVICE_FILE_OBJ) $(UNITY_OBJ) $(TEST_LIBS)
 
+$(BINDIR)/test_disparity_filter: $(TESTDIR)/test_disparity_filter.c $(BINDIR)/disparity_filter.o \
+                                  $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/disparity_filter.o $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_temporal_filter: $(TESTDIR)/test_temporal_filter.c $(BINDIR)/temporal_filter.o \
+                                 $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/temporal_filter.o $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_confidence: $(TESTDIR)/test_confidence.c $(BINDIR)/confidence.o \
+                            $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/confidence.o $(UNITY_OBJ) $(TEST_LIBS)
+
 $(BINDIR)/gen_test_calibration: $(TESTDIR)/gen_test_calibration.c | $(BINDIR)
 	$(CC) -Wall -O2 -o $@ $<
 
 test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning \
       $(BINDIR)/test_calib_load $(BINDIR)/test_focus $(BINDIR)/test_stereo_common \
       $(BINDIR)/test_imgproc_extra $(BINDIR)/test_image \
-      $(BINDIR)/test_calib_load_slot
+      $(BINDIR)/test_calib_load_slot $(BINDIR)/test_disparity_filter \
+      $(BINDIR)/test_temporal_filter $(BINDIR)/test_confidence
 	@echo "=== Unit Tests ==="
 	$(BINDIR)/test_calib_archive
 	$(BINDIR)/test_remap
@@ -227,6 +243,9 @@ test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning \
 	$(BINDIR)/test_imgproc_extra
 	$(BINDIR)/test_image
 	$(BINDIR)/test_calib_load_slot
+	$(BINDIR)/test_disparity_filter
+	$(BINDIR)/test_temporal_filter
+	$(BINDIR)/test_confidence
 
 # ---- Hardware Integration Tests (camera required) ---------------------
 
