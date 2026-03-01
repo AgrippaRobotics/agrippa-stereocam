@@ -81,7 +81,8 @@ sgbm_effective_p2 (const AgSgbmParams *p)
 static void
 print_sgbm_params (const AgSgbmParams *p)
 {
-    printf ("SGBM params: min=%d num=%d block=%d P1=%d%s P2=%d%s uniq=%d "
+    printf ("\r\033[K"
+            "SGBM params: min=%d num=%d block=%d P1=%d%s P2=%d%s uniq=%d "
             "speckleWin=%d speckleRange=%d preCap=%d disp12=%d mode=%d\n",
             p->min_disparity, p->num_disparities, p->block_size,
             sgbm_effective_p1 (p), p->p1 == 0 ? " (auto)" : "",
@@ -514,7 +515,7 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                            sgbm_params->num_disparities : 128);
                     /* Use metadata for depth if available. */
                     (void) depth;
-                    printf ("click (%d,%d) disp_q4=%d disp=%.2f px\n",
+                    printf ("\r\033[Kclick (%d,%d) disp_q4=%d disp=%.2f px\n",
                             dx, py, (int) d, (double) d / 16.0);
                 }
             }
@@ -764,10 +765,11 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
 
         double elapsed = g_timer_elapsed (stats_timer, NULL);
         if (elapsed >= 5.0) {
-            printf ("  %.1f fps (displayed=%" G_GUINT64_FORMAT
-                    " dropped=%" G_GUINT64_FORMAT ") [%s]\n",
+            printf ("\r\033[K%.1f fps  disp=%" G_GUINT64_FORMAT
+                    " drop=%" G_GUINT64_FORMAT "  [%s]",
                     frames_displayed / elapsed, frames_displayed,
                     frames_dropped, ag_stereo_backend_name (backend));
+            fflush (stdout);
             frames_displayed = 0;
             frames_dropped = 0;
             g_timer_start (stats_timer);
