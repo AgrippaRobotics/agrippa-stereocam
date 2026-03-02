@@ -18,6 +18,7 @@ ag-cam-tools <command> [options]
 | `calibration-capture` | Capture stereo pairs for calibration |
 | `depth-preview-classical` | Show rectified disparity with classical stereo |
 | `depth-preview-neural` | Show rectified disparity with ONNX stereo |
+| `depth-capture` | Capture RGBA depth map (RGB + depth alpha) for ML export |
 | `calibration-stash` | Store and retrieve calibration archives on-camera |
 | `bounce` | Reset (power-cycle) the camera over GigE |
 
@@ -40,5 +41,6 @@ Most commands accept:
 - [calibration-capture](calibration-capture.md)
 - [depth-preview-classical](depth-preview-classical.md)
 - [depth-preview-neural](depth-preview-neural.md)
+- [depth-capture](depth-capture.md)
 - [calibration-stash](calibration-stash.md)
 - [bounce](bounce.md)

@@ -37,6 +37,11 @@ int write_gray_image (AgEncFormat enc, const char *path,
  * after debayering (or gray expansion) and before encoding.
  * Pass NULL for both to skip rectification (backward compatible).
  */
+/* Write a 4-channel RGBA PNG.  rgb is width*height*3, alpha is width*height. */
+int write_rgba_png (const char *path,
+                    const guint8 *rgb, const guint8 *alpha,
+                    guint width, guint height);
+
 int write_dual_bayer_pair (const char *output_dir,
                            const char *basename_no_ext,
                            const guint8 *interleaved,

@@ -29,6 +29,7 @@ Use it for:
 - **Focus tuning** — live per-eye focus scoring with selectable metrics (Laplacian, Tenengrad, Brenner), region-of-interest control, and procedural stereo audio feedback for hands-free lens alignment.
 - **Calibration capture** — interactive stereo pair acquisition for calibration datasets, with audio confirmation cues.
 - **Depth preview** — rectified disparity visualization with classical (SGBM) and neural (ONNX) stereo backends, plus live parameter tuning.
+- **Depth capture** — export RGBA PNGs with camera colour in RGB and normalised depth in the alpha channel, square-cropped and sized for ML training pipelines.
 - **Calibration storage** — upload, download, and manage calibration archives directly on the camera.
 - **Camera reset** — power-cycle cameras over GigE with `bounce`.
 - **Binning-aware pipeline** — automatic grayscale handling when `2x2` sensor binning collapses the Bayer pattern.
