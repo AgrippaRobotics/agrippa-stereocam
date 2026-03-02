@@ -17,7 +17,8 @@ calibration/.venv/
 backends/.venv/
 site/
 
-# Vendor SDKs and documentation (local only)
+# Vendor SDKs and documentation — excluded via .git/info/exclude
+# so they stay visible to coding agents' @ file picker.
 # ArenaSDK_*/
 # PDH016S_*_Documentation*/
 
