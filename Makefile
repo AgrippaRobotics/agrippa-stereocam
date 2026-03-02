@@ -32,7 +32,8 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/calib_archive.c \
        $(SRCDIR)/calib_load.c \
        $(SRCDIR)/cmd_calibration_stash.c \
-       $(SRCDIR)/cmd_bounce.c
+       $(SRCDIR)/cmd_bounce.c \
+       $(SRCDIR)/burst.c
 
 VENDOR_SRCS = $(VENDORDIR)/argtable3.c \
               $(VENDORDIR)/cJSON.c
@@ -213,10 +214,13 @@ $(BINDIR)/test_calib_load_slot: $(TESTDIR)/test_calib_load_slot.c $(TEST_OBJS) \
 $(BINDIR)/gen_test_calibration: $(TESTDIR)/gen_test_calibration.c | $(BINDIR)
 	$(CC) -Wall -O2 -o $@ $<
 
+$(BINDIR)/test_burst: $(TESTDIR)/test_burst.c $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(UNITY_OBJ) $(TEST_LIBS)
+
 test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning \
       $(BINDIR)/test_calib_load $(BINDIR)/test_focus $(BINDIR)/test_stereo_common \
       $(BINDIR)/test_imgproc_extra $(BINDIR)/test_image \
-      $(BINDIR)/test_calib_load_slot
+      $(BINDIR)/test_calib_load_slot $(BINDIR)/test_burst
 	@echo "=== Unit Tests ==="
 	$(BINDIR)/test_calib_archive
 	$(BINDIR)/test_remap
@@ -227,6 +231,7 @@ test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning \
 	$(BINDIR)/test_imgproc_extra
 	$(BINDIR)/test_image
 	$(BINDIR)/test_calib_load_slot
+	$(BINDIR)/test_burst
 
 # ---- Hardware Integration Tests (camera required) ---------------------
 
@@ -235,6 +240,7 @@ test-hw: $(TARGET) $(BINDIR)/gen_test_calibration
 	$(TESTDIR)/test_stash_hw.sh
 	$(TESTDIR)/test_binning_hw.sh
 	$(TESTDIR)/test_capture_rectify_hw.sh
+	$(TESTDIR)/test_burst_hw.sh
 	$(TESTDIR)/test_bounce_hw.sh
 
 test-all: test test-hw

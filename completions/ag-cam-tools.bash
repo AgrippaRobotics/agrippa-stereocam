@@ -74,7 +74,7 @@ _ag_cam_tools() {
             COMPREPLY=( $(compgen -W "-i --interface --machine-readable -h --help" -- "${cur}") )
             ;;
         capture)
-            COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -o --output -e --encode -x --exposure -b --binning --calibration-local --calibration-slot -v --verbose -h --help" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -o --output -e --encode -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size --burst --calibration-local --calibration-slot -v --verbose -h --help" -- "${cur}") )
             ;;
         stream)
             COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -f --fps -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size --calibration-local --calibration-slot -t --tag-size -h --help" -- "${cur}") )

@@ -2,10 +2,12 @@
  * cmd_capture.c — "ag-cam-tools capture" subcommand
  *
  * SingleFrame acquisition with software trigger.  Writes DualBayerRG8
- * stereo pairs to disk.
+ * stereo pairs to disk.  With --burst N, captures N frames in rapid
+ * succession via FrameBurstStart triggering.
  */
 
 #include "common.h"
+#include "burst.h"
 #include "calib_load.h"
 #include "image.h"
 #include "../vendor/argtable3.h"
@@ -260,6 +262,160 @@ capture_one_frame (const char *device_id, const char *output_dir,
     return rc;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Burst capture path                                                 */
+/* ------------------------------------------------------------------ */
+
+static int
+capture_burst_frames (const char *device_id, const char *output_dir,
+                      const char *iface_ip, AgEncFormat enc,
+                      double exposure_us, double gain_db,
+                      gboolean auto_expose, int packet_size, int binning,
+                      gboolean verbose,
+                      const AgCalibSource *calib_src,
+                      int burst_count)
+{
+    GError *error = NULL;
+    ArvCamera *camera = arv_camera_new (device_id, &error);
+    if (!camera) {
+        fprintf (stderr, "error: %s\n",
+                 error ? error->message : "failed to open device");
+        g_clear_error (&error);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
+    printf ("Connected.\n");
+
+    /* Use Continuous mode so FrameBurstStart triggering works. */
+    AgCameraConfig cfg;
+    if (camera_configure (camera, AG_MODE_CONTINUOUS,
+                          binning, exposure_us, gain_db, auto_expose,
+                          packet_size, iface_ip, verbose, &cfg) != EXIT_SUCCESS) {
+        g_object_unref (camera);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
+    ArvDevice *device = arv_camera_get_device (camera);
+
+    /* Load rectification remap tables if calibration was requested. */
+    AgRemapTable *remap_left  = NULL;
+    AgRemapTable *remap_right = NULL;
+
+    if (calib_src->local_path || calib_src->slot >= 0) {
+        if (ag_calib_load (device, calib_src,
+                            &remap_left, &remap_right, NULL) != 0) {
+            g_object_unref (cfg.stream);
+            g_object_unref (camera);
+            arv_shutdown ();
+            return EXIT_FAILURE;
+        }
+
+        guint proc_sub_w = (cfg.frame_w / 2) / (guint) cfg.software_binning;
+        guint proc_h     = cfg.frame_h / (guint) cfg.software_binning;
+        if (remap_left->width != proc_sub_w ||
+            remap_left->height != proc_h) {
+            fprintf (stderr,
+                     "error: remap dimensions %ux%u do not match frame %ux%u\n",
+                     remap_left->width, remap_left->height,
+                     proc_sub_w, proc_h);
+            ag_remap_table_free (remap_left);
+            ag_remap_table_free (remap_right);
+            g_object_unref (cfg.stream);
+            g_object_unref (camera);
+            arv_shutdown ();
+            return EXIT_FAILURE;
+        }
+
+        printf ("Rectification maps loaded (%ux%u).\n",
+                remap_left->width, remap_left->height);
+    }
+
+    /* Auto-expose: settle under FrameStart trigger, then reconfigure. */
+    if (auto_expose) {
+        printf ("Starting acquisition for auto-exposure settle...\n");
+        arv_camera_start_acquisition (camera, &error);
+        if (error) {
+            fprintf (stderr, "error: failed to start acquisition: %s\n",
+                     error->message);
+            g_clear_error (&error);
+            ag_remap_table_free (remap_left);
+            ag_remap_table_free (remap_right);
+            g_object_unref (cfg.stream);
+            g_object_unref (camera);
+            arv_shutdown ();
+            return EXIT_FAILURE;
+        }
+
+        auto_expose_settle (camera, &cfg, 100000.0);
+
+        arv_camera_stop_acquisition (camera, NULL);
+        printf ("Auto-exposure locked.  Reconfiguring for burst...\n");
+    }
+
+    /* Reconfigure trigger registers for FrameBurstStart. */
+    burst_configure_trigger (device, burst_count);
+
+    /* Ensure enough stream buffers.  camera_configure pushed 16. */
+    burst_ensure_buffers (cfg.stream, cfg.payload, burst_count, 16);
+
+    /* Start acquisition in burst mode. */
+    printf ("Starting burst acquisition...\n");
+    arv_camera_start_acquisition (camera, &error);
+    if (error) {
+        fprintf (stderr, "error: failed to start acquisition: %s\n",
+                 error->message);
+        g_clear_error (&error);
+        ag_remap_table_free (remap_left);
+        ag_remap_table_free (remap_right);
+        g_object_unref (cfg.stream);
+        g_object_unref (camera);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
+    /* Create timestamped burst output subdirectory. */
+    time_t now = time (NULL);
+    struct tm tm_now;
+    localtime_r (&now, &tm_now);
+    char subdir_name[64];
+    strftime (subdir_name, sizeof subdir_name,
+              "burst_%Y%m%d_%H%M%S", &tm_now);
+    char *burst_dir = g_build_filename (output_dir, subdir_name, NULL);
+
+    if (g_mkdir_with_parents (burst_dir, 0755) != 0) {
+        fprintf (stderr, "error: cannot create burst directory '%s'\n",
+                 burst_dir);
+        g_free (burst_dir);
+        arv_camera_stop_acquisition (camera, NULL);
+        ag_remap_table_free (remap_left);
+        ag_remap_table_free (remap_right);
+        g_object_unref (cfg.stream);
+        g_object_unref (camera);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
+    printf ("Burst output -> %s\n", burst_dir);
+
+    int rc = burst_capture (camera, &cfg, burst_count, burst_dir, enc,
+                             remap_left, remap_right);
+
+    g_free (burst_dir);
+    arv_camera_stop_acquisition (camera, NULL);
+    ag_remap_table_free (remap_left);
+    ag_remap_table_free (remap_right);
+    g_object_unref (cfg.stream);
+    g_object_unref (camera);
+    arv_shutdown ();
+    return rc;
+}
+
+/* ------------------------------------------------------------------ */
+/*  CLI entry point                                                    */
+/* ------------------------------------------------------------------ */
+
 int
 cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
 {
@@ -286,6 +442,8 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           "sensor binning factor (default: 1)");
     struct arg_int *pkt_size  = arg_int0 ("p", "packet-size", "<bytes>",
                                           "GigE packet size (default: auto-negotiate)");
+    struct arg_int *burst     = arg_int0 (NULL, "burst", "<N>",
+                                          "burst capture N frames (2-100)");
     struct arg_str *calib_local = arg_str0 (NULL, "calibration-local", "<path>",
                                             "rectify using local calibration session");
     struct arg_int *calib_slot  = arg_int0 (NULL, "calibration-slot", "<0-2>",
@@ -296,7 +454,7 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
     struct arg_end *end       = arg_end (10);
     void *argtable[] = { cmd, serial, address, interface, output, encode,
                          exposure, gain, auto_exp, binning_a, pkt_size,
-                         calib_local, calib_slot,
+                         burst, calib_local, calib_slot,
                          verbose, help, end };
 
     int exitcode = EXIT_SUCCESS;
@@ -355,6 +513,18 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
         arg_dstr_catf (res, "error: --binning must be 1 or 2\n");
         exitcode = EXIT_FAILURE;
         goto done;
+    }
+
+    /* Validate burst count. */
+    int burst_count = 0;
+    if (burst->count) {
+        burst_count = burst->ival[0];
+        if (burst_count < AG_BURST_MIN || burst_count > AG_BURST_MAX) {
+            arg_dstr_catf (res, "error: --burst must be between %d and %d\n",
+                           AG_BURST_MIN, AG_BURST_MAX);
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
     }
 
     /* Validate calibration args (mutually exclusive). */
@@ -420,10 +590,17 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
 
     int pkt_sz = pkt_size->count ? pkt_size->ival[0] : 0;
 
-    exitcode = capture_one_frame (device_id, opt_output, iface_ip, enc,
-                                   exposure_us, gain_db, do_auto_expose,
-                                   pkt_sz, binning, verbose->count > 0,
-                                   &calib_src);
+    if (burst_count > 0)
+        exitcode = capture_burst_frames (device_id, opt_output, iface_ip,
+                                          enc, exposure_us, gain_db,
+                                          do_auto_expose, pkt_sz, binning,
+                                          verbose->count > 0,
+                                          &calib_src, burst_count);
+    else
+        exitcode = capture_one_frame (device_id, opt_output, iface_ip, enc,
+                                       exposure_us, gain_db, do_auto_expose,
+                                       pkt_sz, binning, verbose->count > 0,
+                                       &calib_src);
     g_free (device_id);
 
 done:
