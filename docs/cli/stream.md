@@ -39,7 +39,8 @@ Supplying `--calibration-local` or `--calibration-slot` enables stereo rectifica
 
 On ARM64 platforms, the remap path uses NEON acceleration.
 
-## Runtime behavior
+## Notes
 
 - Press `q` or `Esc` to quit.
 - When AprilTag detection is enabled, detections are printed to stdout per frame and per eye.
+- When the camera reports that post-binning data is no longer Bayer, the preview switches to grayscale and skips debayering.

@@ -19,6 +19,7 @@ ag-cam-tools <command> [options]
 | `depth-preview-classical` | Show rectified disparity with classical stereo |
 | `depth-preview-neural` | Show rectified disparity with ONNX stereo |
 | `calibration-stash` | Store and retrieve calibration archives on-camera |
+| `bounce` | Reset (power-cycle) the camera over GigE |
 
 ## Common device selection options
 
@@ -40,3 +41,4 @@ Most commands accept:
 - [depth-preview-classical](depth-preview-classical.md)
 - [depth-preview-neural](depth-preview-neural.md)
 - [calibration-stash](calibration-stash.md)
+- [bounce](bounce.md)

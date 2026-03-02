@@ -1,35 +1,19 @@
-# Binning and Bayer Notes
+# Binning and Bayer
 
-This page summarizes the repo's current reasoning around 2x2 binning and Bayer interpretation.
+## Behavior
 
-## Core issue
+When `--binning 2` is used, the camera performs sensor-level `2x2` averaging. Because the averaging collapses a full Bayer quad (R, G, G, B) into a single mixed sample, the output is no longer a valid Bayer mosaic.
 
-When the camera performs sensor-level `2x2` binning in average mode, a post-binning sample may no longer represent a valid Bayer site. That matters because several downstream paths historically assumed that binned data could still be demosaiced as if it were a true CFA image.
+The runtime reads back `IspBayerPattern` after configuration. When the camera reports that the Bayer pattern is no longer present, all downstream paths treat the image as single-channel grayscale and skip debayering. This applies to:
 
-## Why this matters
+- `capture` — writes grayscale PGM, PNG, or JPEG instead of color
+- `stream` — displays grayscale preview
+- `focus` — computes focus metrics on the grayscale image directly
+- `calibration-capture` — saves grayscale calibration pairs
+- `depth-preview-classical` — feeds grayscale directly to the disparity pipeline without a redundant debayer-then-convert-to-gray round-trip
 
-If a `2x2` Bayer neighborhood is averaged together:
+At `--binning 1` (the default), the full Bayer mosaic is preserved and color debayering proceeds normally.
 
-- the output is a mixed spectral value,
-- debayering is no longer mathematically well-founded,
-- grayscale or luminance-style handling is more defensible than color reconstruction.
+## Software binning fallback
 
-## Current repo stance
-
-The runtime now reads back the effective Bayer state after configuration and treats the image as grayscale when the camera reports that the Bayer pattern is no longer present.
-
-That affects:
-
-- capture output,
-- stream preview,
-- focus,
-- calibration capture,
-- depth preview paths.
-
-## Practical consequence
-
-For `binning=2`, expect grayscale-like handling unless the device explicitly reports that a valid Bayer pattern is still preserved.
-
-## Original investigation
-
-The full investigation notes remain in the repo root at [../../binning_bug_fix.md](../../binning_bug_fix.md).
+When the camera does not support hardware binning, a software fallback averages each `2x2` block. This also destroys the CFA layout, so the same grayscale path applies.
