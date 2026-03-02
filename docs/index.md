@@ -24,7 +24,7 @@ Use it for:
 `ag-cam-tools` currently supports:
 
 - **Discovery and connection** — find and connect to Lucid GigE stereo cameras on the network, with serial, address, and NIC selection.
-- **Stereo capture** — single-frame stereo pair capture with optional rectification.
+- **Stereo capture** — single-frame or burst-mode (`--burst N`) stereo pair capture with optional rectification. Burst mode uses FrameBurstStart triggering for rapid multi-frame acquisition.
 - **Live preview** — real-time SDL stereo display with optional AprilTag detection and rectification overlay.
 - **Focus tuning** — live per-eye focus scoring with selectable metrics (Laplacian, Tenengrad, Brenner), region-of-interest control, and procedural stereo audio feedback for hands-free lens alignment.
 - **Calibration capture** — interactive stereo pair acquisition for calibration datasets, with audio confirmation cues.
