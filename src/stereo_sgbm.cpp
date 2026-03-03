@@ -5,13 +5,17 @@
  * functions consumed by stereo_common.c so the rest of the codebase
  * remains pure C99.
  *
- * Requires: opencv4 (opencv_core, opencv_calib3d, opencv_imgproc)
+ * Requires: opencv4 (opencv_core, opencv_calib3d, opencv_imgproc,
+ *                     opencv_ximgproc for WLS filter)
  */
 
 #include <opencv2/core.hpp>
 #include <opencv2/calib3d.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/ximgproc/disparity_filter.hpp>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 /* Import the C header for types. */
 extern "C" {
@@ -140,4 +144,112 @@ extern "C" void
 ag_sgbm_destroy (void *sgbm_ptr)
 {
     delete static_cast<SgbmHandle *> (sgbm_ptr);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Left-right disparity computation (for WLS filter)                  */
+/* ------------------------------------------------------------------ */
+
+extern "C" int
+ag_sgbm_compute_lr (void *sgbm_ptr, uint32_t width, uint32_t height,
+                     const uint8_t *left, const uint8_t *right,
+                     int16_t *disp_lr_out, int16_t *disp_rl_out)
+{
+    auto *handle = static_cast<SgbmHandle *> (sgbm_ptr);
+
+    cv::Mat left_mat  (height, width, CV_8UC1, const_cast<uint8_t *> (left));
+    cv::Mat right_mat (height, width, CV_8UC1, const_cast<uint8_t *> (right));
+    cv::Mat disp_lr, disp_rl;
+
+    /* Left-to-right (normal). */
+    handle->sgbm->compute (left_mat, right_mat, disp_lr);
+
+    /* Right-to-left (create matching right matcher). */
+    auto right_matcher = cv::ximgproc::createRightMatcher (handle->sgbm);
+    right_matcher->compute (right_mat, left_mat, disp_rl);
+
+    if (disp_lr.type () != CV_16S || disp_rl.type () != CV_16S ||
+        (uint32_t) disp_lr.cols != width ||
+        (uint32_t) disp_lr.rows != height) {
+        fprintf (stderr, "sgbm: unexpected LR output format\n");
+        return -1;
+    }
+
+    for (uint32_t y = 0; y < height; y++) {
+        memcpy (disp_lr_out + (size_t) y * width,
+                disp_lr.ptr<int16_t> (y),
+                width * sizeof (int16_t));
+        memcpy (disp_rl_out + (size_t) y * width,
+                disp_rl.ptr<int16_t> (y),
+                width * sizeof (int16_t));
+    }
+
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  WLS (Weighted Least Squares) disparity filter                      */
+/* ------------------------------------------------------------------ */
+
+extern "C" int
+ag_sgbm_wls_filter (void *sgbm_ptr,
+                     const uint8_t *left_guide,
+                     const int16_t *disp_lr,
+                     const int16_t *disp_rl,
+                     int16_t *filtered_out,
+                     uint32_t width, uint32_t height,
+                     double lambda, double sigma_color)
+{
+    auto *handle = static_cast<SgbmHandle *> (sgbm_ptr);
+
+    cv::Mat guide (height, width, CV_8UC1,
+                   const_cast<uint8_t *> (left_guide));
+    cv::Mat lr_mat (height, width, CV_16SC1,
+                    const_cast<int16_t *> (disp_lr));
+    cv::Mat rl_mat (height, width, CV_16SC1,
+                    const_cast<int16_t *> (disp_rl));
+    cv::Mat filtered;
+
+    auto wls = cv::ximgproc::createDisparityWLSFilter (handle->sgbm);
+    wls->setLambda (lambda);
+    wls->setSigmaColor (sigma_color);
+    wls->filter (lr_mat, guide, filtered, rl_mat);
+
+    if (filtered.type () != CV_16S) {
+        fprintf (stderr, "sgbm: WLS filter produced unexpected type\n");
+        return -1;
+    }
+
+    for (uint32_t y = 0; y < height; y++) {
+        memcpy (filtered_out + (size_t) y * width,
+                filtered.ptr<int16_t> (y),
+                width * sizeof (int16_t));
+    }
+
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  CLAHE pre-processing                                               */
+/* ------------------------------------------------------------------ */
+
+extern "C" void
+ag_clahe_apply (const uint8_t *input, uint8_t *output,
+                uint32_t width, uint32_t height,
+                double clip_limit, int tile_size)
+{
+    cv::Mat in_mat (height, width, CV_8UC1,
+                    const_cast<uint8_t *> (input));
+    cv::Mat out_mat;
+
+    auto clahe = cv::createCLAHE (clip_limit,
+                                   cv::Size (tile_size, tile_size));
+    clahe->apply (in_mat, out_mat);
+
+    /* Copy result row-by-row in case of non-contiguous Mat. */
+    for (uint32_t y = 0; y < height; y++) {
+        const uint8_t *src = out_mat.ptr<uint8_t> (y);
+        uint8_t *dst = output + (size_t) y * width;
+        memcpy (dst, src, width);
+    }
 }

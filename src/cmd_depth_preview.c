@@ -8,6 +8,9 @@
 
 #include "common.h"
 #include "calib_load.h"
+#include "confidence.h"
+#include "disparity_filter.h"
+#include "temporal_filter.h"
 #include "font.h"
 #include "remap.h"
 #include "stereo.h"
@@ -78,7 +81,8 @@ sgbm_effective_p2 (const AgSgbmParams *p)
 static void
 print_sgbm_params (const AgSgbmParams *p)
 {
-    printf ("SGBM params: min=%d num=%d block=%d P1=%d%s P2=%d%s uniq=%d "
+    printf ("\r\033[K"
+            "SGBM params: min=%d num=%d block=%d P1=%d%s P2=%d%s uniq=%d "
             "speckleWin=%d speckleRange=%d preCap=%d disp12=%d mode=%d\n",
             p->min_disparity, p->num_disparities, p->block_size,
             sgbm_effective_p1 (p), p->p1 == 0 ? " (auto)" : "",
@@ -108,6 +112,41 @@ print_sgbm_controls (void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Post-processing options                                            */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    /* CLAHE pre-processing (#11). */
+    gboolean clahe;
+    double   clahe_clip;           /* clip limit, recommended 2.0–4.0 */
+    int      clahe_tile;           /* tile grid size, recommended 8 */
+
+    /* Specular masking (#12). */
+    gboolean specular_mask;
+    uint8_t  specular_threshold;   /* 0-255, recommended 250 */
+    int      specular_radius;      /* dilation radius, recommended 2 */
+
+    /* Median filter (#13). */
+    int      median_kernel;        /* 0=off, 3 or 5 recommended */
+
+    /* Morphological cleanup (#13). */
+    gboolean morph_cleanup;
+    int      morph_close_radius;   /* recommended 1-2 */
+    int      morph_open_radius;    /* recommended 1-2 */
+
+    /* WLS disparity filter (#9). */
+    gboolean wls_filter;
+    double   wls_lambda;           /* regularization strength, default 8000.0 */
+    double   wls_sigma;            /* edge sensitivity, default 1.5 */
+
+    /* Temporal median filter (#10). */
+    int      temporal_frames;      /* 0=off, 3-9 recommended */
+
+    /* Confidence map (#14). */
+    gboolean confidence_map;       /* show confidence overlay instead of disparity */
+} AgPostProcOpts;
+
+/* ------------------------------------------------------------------ */
 /*  Depth preview loop                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -117,7 +156,8 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                     gboolean auto_expose, int packet_size, int binning,
                     const AgCalibSource *calib_src, AgStereoBackend backend,
                     AgSgbmParams *sgbm_params, const AgOnnxParams *onnx_params,
-                    gboolean enable_runtime_tuning)
+                    gboolean enable_runtime_tuning,
+                    const AgPostProcOpts *postproc)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -199,6 +239,18 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
         print_sgbm_params (sgbm_params);
     }
 
+    /* Temporal median filter (optional). */
+    AgTemporalFilter *temporal_ctx = NULL;
+    if (postproc->temporal_frames >= 2) {
+        temporal_ctx = ag_temporal_filter_create (
+            proc_sub_w, proc_h, postproc->temporal_frames);
+        if (temporal_ctx)
+            printf ("Temporal median filter: %d frames\n",
+                    postproc->temporal_frames);
+        else
+            fprintf (stderr, "warn: failed to create temporal filter\n");
+    }
+
     /* SDL2 setup. */
     if (SDL_Init (SDL_INIT_VIDEO) != 0) {
         fprintf (stderr, "error: SDL_Init: %s\n", SDL_GetError ());
@@ -259,9 +311,20 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     guint8 *rect_gray_l   = g_malloc (eye_pixels);
     guint8 *rect_gray_r   = g_malloc (eye_pixels);
 
-    /* Disparity output. */
-    int16_t *disparity_buf = g_malloc (eye_pixels * sizeof (int16_t));
-    guint8  *disparity_rgb = g_malloc (eye_rgb);
+    /* Disparity output + scratch for post-processing. */
+    int16_t *disparity_buf     = g_malloc (eye_pixels * sizeof (int16_t));
+    int16_t *disparity_scratch = g_malloc (eye_pixels * sizeof (int16_t));
+    guint8  *disparity_rgb     = g_malloc (eye_rgb);
+
+    /* Right-to-left disparity buffer (only needed for WLS filter). */
+    int16_t *disparity_rl = NULL;
+    if (postproc->wls_filter)
+        disparity_rl = g_malloc (eye_pixels * sizeof (int16_t));
+
+    /* Confidence map buffer (only needed for --confidence-map). */
+    uint8_t *confidence_buf = NULL;
+    if (postproc->confidence_map)
+        confidence_buf = g_malloc (eye_pixels);
 
     /* Start acquisition. */
     printf ("Starting acquisition at %.1f Hz...\n", fps);
@@ -423,6 +486,9 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                     if (ag_disparity_update_sgbm_params (disp_ctx, &next) == 0) {
                         *sgbm_params = next;
                         print_sgbm_params (sgbm_params);
+                        /* Reset temporal filter — stale frames use old params. */
+                        if (temporal_ctx)
+                            ag_temporal_filter_reset (temporal_ctx);
                     } else {
                         fprintf (stderr, "warn: failed to apply SGBM params\n");
                     }
@@ -449,7 +515,7 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
                            sgbm_params->num_disparities : 128);
                     /* Use metadata for depth if available. */
                     (void) depth;
-                    printf ("click (%d,%d) disp_q4=%d disp=%.2f px\n",
+                    printf ("\r\033[Kclick (%d,%d) disp_q4=%d disp=%.2f px\n",
                             dx, py, (int) d, (double) d / 16.0);
                 }
             }
@@ -529,14 +595,97 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
         ag_remap_gray (remap_left,  gray_left,  rect_gray_l);
         ag_remap_gray (remap_right, gray_right, rect_gray_r);
 
-        int disp_ok = ag_disparity_compute (disp_ctx,
+        /* ---- Pre-processing ---- */
+#ifdef HAVE_OPENCV
+        if (postproc->clahe) {
+            ag_clahe_apply (rect_gray_l, rect_gray_l,
+                            proc_sub_w, proc_h,
+                            postproc->clahe_clip, postproc->clahe_tile);
+            ag_clahe_apply (rect_gray_r, rect_gray_r,
+                            proc_sub_w, proc_h,
+                            postproc->clahe_clip, postproc->clahe_tile);
+        }
+#endif
+
+        int disp_ok;
+#ifdef HAVE_OPENCV
+        if (postproc->wls_filter && backend == AG_STEREO_SGBM) {
+            void *sgbm_handle = ag_disparity_get_sgbm_handle (disp_ctx);
+            disp_ok = ag_sgbm_compute_lr (sgbm_handle,
+                                           proc_sub_w, proc_h,
+                                           rect_gray_l, rect_gray_r,
+                                           disparity_buf, disparity_rl);
+        } else
+#endif
+        {
+            disp_ok = ag_disparity_compute (disp_ctx,
                                              rect_gray_l, rect_gray_r,
                                              disparity_buf);
+        }
 
-        ag_disparity_colorize (disparity_buf, proc_sub_w, proc_h,
-                               sgbm_params->min_disparity,
-                               sgbm_params->num_disparities,
-                               disparity_rgb);
+        /* ---- Post-processing chain ---- */
+        if (disp_ok == 0) {
+            /* 1. Specular masking (invalidate saturated regions). */
+            if (postproc->specular_mask)
+                ag_disparity_mask_specular (disparity_buf,
+                                            rect_gray_l, rect_gray_r,
+                                            proc_sub_w, proc_h,
+                                            postproc->specular_threshold,
+                                            postproc->specular_radius);
+
+            /* 2. Median filter (remove salt-and-pepper noise). */
+            if (postproc->median_kernel >= 3) {
+                ag_disparity_median_filter (disparity_buf, disparity_scratch,
+                                            proc_sub_w, proc_h,
+                                            postproc->median_kernel);
+                memcpy (disparity_buf, disparity_scratch,
+                        eye_pixels * sizeof (int16_t));
+            }
+
+            /* 3. Morphological cleanup (fill small holes, remove bumps). */
+            if (postproc->morph_cleanup)
+                ag_disparity_morph_cleanup (disparity_buf,
+                                            proc_sub_w, proc_h,
+                                            postproc->morph_close_radius,
+                                            postproc->morph_open_radius);
+
+            /* 4. WLS filter (edge-preserving smooth + occlusion fill). */
+#ifdef HAVE_OPENCV
+            if (postproc->wls_filter && backend == AG_STEREO_SGBM &&
+                disparity_rl != NULL) {
+                void *sgbm_handle = ag_disparity_get_sgbm_handle (disp_ctx);
+                if (ag_sgbm_wls_filter (sgbm_handle,
+                                         rect_gray_l,
+                                         disparity_buf, disparity_rl,
+                                         disparity_scratch,
+                                         proc_sub_w, proc_h,
+                                         postproc->wls_lambda,
+                                         postproc->wls_sigma) == 0) {
+                    memcpy (disparity_buf, disparity_scratch,
+                            eye_pixels * sizeof (int16_t));
+                }
+            }
+#endif
+
+            /* 5. Temporal median filter (multi-frame de-noising). */
+            if (temporal_ctx) {
+                ag_temporal_filter_push (temporal_ctx,
+                                         disparity_buf, disparity_buf);
+            }
+        }
+
+        /* ---- Colorize disparity (or confidence overlay) ---- */
+        if (disp_ok == 0 && postproc->confidence_map && confidence_buf) {
+            ag_confidence_compute (disparity_buf, rect_gray_l,
+                                    proc_sub_w, proc_h, confidence_buf);
+            ag_confidence_colorize (confidence_buf, proc_sub_w, proc_h,
+                                    disparity_rgb);
+        } else {
+            ag_disparity_colorize (disparity_buf, proc_sub_w, proc_h,
+                                   sgbm_params->min_disparity,
+                                   sgbm_params->num_disparities,
+                                   disparity_rgb);
+        }
 
         /* ---- Display path (with gamma for natural look) ---- */
         apply_lut_inplace (bayer_left,  eye_pixels, gamma_lut);
@@ -616,10 +765,11 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
 
         double elapsed = g_timer_elapsed (stats_timer, NULL);
         if (elapsed >= 5.0) {
-            printf ("  %.1f fps (displayed=%" G_GUINT64_FORMAT
-                    " dropped=%" G_GUINT64_FORMAT ") [%s]\n",
+            printf ("\r\033[K%.1f fps  disp=%" G_GUINT64_FORMAT
+                    " drop=%" G_GUINT64_FORMAT "  [%s]",
                     frames_displayed / elapsed, frames_displayed,
                     frames_dropped, ag_stereo_backend_name (backend));
+            fflush (stdout);
             frames_displayed = 0;
             frames_dropped = 0;
             g_timer_start (stats_timer);
@@ -633,7 +783,11 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
     arv_camera_stop_acquisition (camera, NULL);
 
 cleanup_sdl:
+    ag_temporal_filter_destroy (temporal_ctx);
+    g_free (confidence_buf);
+    g_free (disparity_rl);
     g_free (disparity_rgb);
+    g_free (disparity_scratch);
     g_free (disparity_buf);
     g_free (rect_gray_r);
     g_free (rect_gray_l);
@@ -701,14 +855,49 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
                                             "override calibration num_disparities");
     struct arg_int *blk_size_a = arg_int0 (NULL, "block-size", "<int>",
                                             "SGBM block size (default: 5)");
+    struct arg_dbl *z_near_a  = arg_dbl0 (NULL, "z-near", "<cm>",
+                                           "near depth limit in cm (computes disparity range)");
+    struct arg_dbl *z_far_a   = arg_dbl0 (NULL, "z-far",  "<cm>",
+                                           "far depth limit in cm (computes disparity range)");
+    /* Pre-processing flags. */
+    struct arg_lit *clahe_a    = arg_lit0 (NULL, "clahe",
+                                           "CLAHE contrast enhancement before matching");
+    struct arg_dbl *clahe_clip_a = arg_dbl0 (NULL, "clahe-clip", "<value>",
+                                              "CLAHE clip limit (default: 2.0)");
+    struct arg_int *clahe_tile_a = arg_int0 (NULL, "clahe-tile", "<size>",
+                                              "CLAHE tile grid size (default: 8)");
+    /* Post-processing flags. */
+    struct arg_lit *mask_spec  = arg_lit0 (NULL, "mask-specular",
+                                           "invalidate disparity at specular highlights");
+    struct arg_int *spec_thresh = arg_int0 (NULL, "specular-threshold", "<0-255>",
+                                             "pixel brightness for specular detection (default: 250)");
+    struct arg_int *median_a   = arg_int0 (NULL, "median-filter", "<kernel>",
+                                            "median filter kernel size (3 or 5, default: off)");
+    struct arg_lit *morph_a    = arg_lit0 (NULL, "morph-cleanup",
+                                           "morphological close+open on disparity");
+    struct arg_lit *wls_a     = arg_lit0 (NULL, "wls-filter",
+                                           "WLS edge-preserving disparity filter (SGBM only)");
+    struct arg_dbl *wls_lam_a = arg_dbl0 (NULL, "wls-lambda", "<value>",
+                                            "WLS regularization strength (default: 8000.0)");
+    struct arg_dbl *wls_sig_a = arg_dbl0 (NULL, "wls-sigma", "<value>",
+                                            "WLS edge sensitivity (default: 1.5)");
+    struct arg_int *temporal_a = arg_int0 (NULL, "temporal-filter", "<frames>",
+                                            "temporal median filter depth (3-9, default: off)");
+    struct arg_lit *conf_map  = arg_lit0 (NULL, "confidence-map",
+                                           "show confidence overlay instead of disparity");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
-    struct arg_end *end       = arg_end (15);
+    struct arg_end *end       = arg_end (20);
 
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
                          gain, auto_exp, binning_a, pkt_size,
                          calib_local, calib_slot,
                          backend_a, model_path_a,
                          min_disp_a, num_disp_a, blk_size_a,
+                         z_near_a, z_far_a,
+                         clahe_a, clahe_clip_a, clahe_tile_a,
+                         mask_spec, spec_thresh, median_a, morph_a,
+                         wls_a, wls_lam_a, wls_sig_a,
+                         temporal_a, conf_map,
                          help, end };
 
     int exitcode = EXIT_SUCCESS;
@@ -829,7 +1018,37 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
     if (calib_src.local_path)
         ag_calib_load_meta (calib_src.local_path, &meta);
 
-    /* CLI overrides. */
+    /* --z-near / --z-far: compute disparity range from depth bounds.
+     * Requires focal_length_px and baseline_cm from calibration. */
+    if (z_near_a->count || z_far_a->count) {
+        if (meta.focal_length_px <= 0.0 || meta.baseline_cm <= 0.0) {
+            arg_dstr_catf (res, "error: --z-near/--z-far require calibration "
+                           "with focal_length_px and baseline_cm\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+        double zn = z_near_a->count ? z_near_a->dval[0] : 30.0;
+        double zf = z_far_a->count  ? z_far_a->dval[0]  : 200.0;
+        int comp_min = 0, comp_num = 128;
+        if (ag_disparity_range_from_depth (zn, zf, meta.focal_length_px,
+                                            meta.baseline_cm,
+                                            &comp_min, &comp_num) != 0) {
+            arg_dstr_catf (res, "error: invalid --z-near/--z-far values "
+                           "(need 0 < z-near < z-far)\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+        meta.min_disparity   = comp_min;
+        meta.num_disparities = comp_num;
+        printf ("Depth bounds: z-near=%.1f cm  z-far=%.1f cm  "
+                "→ min_disp=%d  num_disp=%d\n",
+                zn, zf, comp_min, comp_num);
+        if (comp_num > 256)
+            printf ("  warning: num_disparities=%d is large — "
+                    "expect slower SGBM compute\n", comp_num);
+    }
+
+    /* CLI overrides (take precedence over --z-near/--z-far). */
     if (min_disp_a->count)  meta.min_disparity  = min_disp_a->ival[0];
     if (num_disp_a->count)  meta.num_disparities = num_disp_a->ival[0];
 
@@ -884,12 +1103,31 @@ cmd_depth_preview_impl (int argc, char *argv[], arg_dstr_t res, void *ctx,
 
     int pkt_sz = pkt_size->count ? pkt_size->ival[0] : 0;
 
+    /* Build post-processing options from CLI flags. */
+    AgPostProcOpts postproc = {0};
+    postproc.clahe              = clahe_a->count > 0;
+    postproc.clahe_clip         = clahe_clip_a->count ? clahe_clip_a->dval[0] : 2.0;
+    postproc.clahe_tile         = clahe_tile_a->count ? clahe_tile_a->ival[0] : 8;
+    postproc.specular_mask      = mask_spec->count > 0;
+    postproc.specular_threshold = spec_thresh->count ? (uint8_t) spec_thresh->ival[0] : 250;
+    postproc.specular_radius    = 2;
+    postproc.median_kernel      = median_a->count ? median_a->ival[0] : 0;
+    postproc.morph_cleanup      = morph_a->count > 0;
+    postproc.morph_close_radius = 1;
+    postproc.morph_open_radius  = 1;
+    postproc.wls_filter         = wls_a->count > 0;
+    postproc.wls_lambda         = wls_lam_a->count ? wls_lam_a->dval[0] : 8000.0;
+    postproc.wls_sigma          = wls_sig_a->count ? wls_sig_a->dval[0] : 1.5;
+    postproc.temporal_frames    = temporal_a->count ? temporal_a->ival[0] : 0;
+    postproc.confidence_map     = conf_map->count > 0;
+
     exitcode = depth_preview_loop (device_id, iface_ip, fps,
                                     exposure_us, gain_db,
                                     do_auto_expose, pkt_sz, binning,
                                     &calib_src, backend,
                                     &sgbm_params, &onnx_params,
-                                    enable_runtime_tuning);
+                                    enable_runtime_tuning,
+                                    &postproc);
     g_free (device_id);
 
 done:

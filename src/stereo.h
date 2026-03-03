@@ -115,6 +115,13 @@ int ag_disparity_update_sgbm_params (AgDisparityContext *ctx,
 /* Destroy context and free all backend resources. */
 void ag_disparity_destroy (AgDisparityContext *ctx);
 
+/*
+ * Return the raw SGBM handle pointer for direct backend calls
+ * (e.g. compute_lr, wls_filter).  Returns NULL if ctx is not
+ * an SGBM backend.
+ */
+void *ag_disparity_get_sgbm_handle (AgDisparityContext *ctx);
+
 /* ------------------------------------------------------------------ */
 /*  Disparity visualization                                            */
 /* ------------------------------------------------------------------ */
@@ -143,6 +150,27 @@ ag_disparity_to_depth (int16_t disp_q4, double focal_length_px,
 }
 
 /* ------------------------------------------------------------------ */
+/*  Disparity range from depth bounds                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Compute SGBM min_disparity and num_disparities from depth limits.
+ *
+ * z_near_cm / z_far_cm:  working distance range (same units as baseline).
+ * focal_length_px:       rectified focal length in pixels.
+ * baseline_cm:           stereo baseline in cm.
+ * out_min_disparity:     receives computed minimum disparity.
+ * out_num_disparities:   receives computed num_disparities (multiple of 16).
+ *
+ * Returns 0 on success, -1 on invalid input (e.g. z_near <= 0).
+ */
+int ag_disparity_range_from_depth (double z_near_cm, double z_far_cm,
+                                    double focal_length_px,
+                                    double baseline_cm,
+                                    int *out_min_disparity,
+                                    int *out_num_disparities);
+
+/* ------------------------------------------------------------------ */
 /*  Internal: SGBM backend (stereo_sgbm.cpp, extern "C")              */
 /* ------------------------------------------------------------------ */
 
@@ -154,6 +182,51 @@ int   ag_sgbm_compute (void *sgbm_ptr, uint32_t width, uint32_t height,
                         int16_t *disparity_out);
 int   ag_sgbm_update_params (void *sgbm_ptr, const AgSgbmParams *params);
 void  ag_sgbm_destroy (void *sgbm_ptr);
+
+/*
+ * Compute both left-to-right and right-to-left disparity.
+ * The right-to-left disparity is needed for the WLS filter.
+ * Both output buffers must be pre-allocated (width*height int16_t).
+ * Returns 0 on success, -1 on error.
+ */
+int ag_sgbm_compute_lr (void *sgbm_ptr, uint32_t width, uint32_t height,
+                          const uint8_t *left, const uint8_t *right,
+                          int16_t *disp_lr_out, int16_t *disp_rl_out);
+
+/*
+ * Apply WLS (Weighted Least Squares) disparity filter.
+ * Uses the left image as a guide to smooth disparity while preserving
+ * edges.  When both L->R and R->L disparity are provided, also fills
+ * occlusion regions.
+ *
+ * lambda:      regularization strength (8000.0 is a good default).
+ * sigma_color: edge sensitivity (1.5 is a good default).
+ *
+ * filtered_out must be pre-allocated (width*height int16_t).
+ * Returns 0 on success, -1 on error.
+ */
+int ag_sgbm_wls_filter (void *sgbm_ptr,
+                          const uint8_t *left_guide,
+                          const int16_t *disp_lr,
+                          const int16_t *disp_rl,
+                          int16_t *filtered_out,
+                          uint32_t width, uint32_t height,
+                          double lambda, double sigma_color);
+
+/*
+ * Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to
+ * a grayscale image.  Enhances local contrast for better stereo
+ * matching on low-texture industrial surfaces.
+ *
+ * clip_limit: contrast limit (2.0 is conservative, 3-4 for low texture).
+ * tile_size:  grid size for adaptive equalization (8 = ~180x135 tiles
+ *             at 1440x1080 resolution).
+ *
+ * input and output may alias (in-place operation is safe).
+ */
+void ag_clahe_apply (const uint8_t *input, uint8_t *output,
+                      uint32_t width, uint32_t height,
+                      double clip_limit, int tile_size);
 #endif
 
 /* ------------------------------------------------------------------ */

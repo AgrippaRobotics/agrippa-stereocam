@@ -25,11 +25,14 @@ Unit tests are standalone C programs built around the [Unity](https://github.com
 | `bin/test_remap` | `tests/test_remap.c` | 12 | Remap table loading and application |
 | `bin/test_binning` | `tests/test_binning.c` | 9 | Debayer, software binning, and grayscale processing |
 | `bin/test_calib_load` | `tests/test_calib_load.c` | 9 | Local-path calibration loading, metadata parsing |
-| `bin/test_focus` | `tests/test_focus.c` | 10 | Focus score ordering, ROI clamping, Laplacian precision |
-| `bin/test_stereo_common` | `tests/test_stereo_common.c` | 17 | Backend parsing, SGBM defaults, JET colorize, depth conversion |
-| `bin/test_imgproc_extra` | `tests/test_imgproc_extra.c` | 18 | Gamma LUT, color conversion, roundtrip proofs |
+| `bin/test_focus` | `tests/test_focus.c` | 24 | Focus metrics (Laplacian, Tenengrad, Brenner), ROI, blur monotonicity |
+| `bin/test_stereo_common` | `tests/test_stereo_common.c` | 21 | Backend parsing, SGBM defaults, JET colorize, depth conversion, range |
+| `bin/test_imgproc_extra` | `tests/test_imgproc_extra.c` | 21 | Gamma LUT, color conversion, debayer-to-gray, DualBayer pipeline |
 | `bin/test_image` | `tests/test_image.c` | 17 | Format parsing, PGM/PNG/JPG encoding, DualBayer pair output |
 | `bin/test_calib_load_slot` | `tests/test_calib_load_slot.c` | 10 | Slot-based calibration loading via mock device |
+| `bin/test_disparity_filter` | `tests/test_disparity_filter.c` | 10 | Specular masking, median filter, morphological cleanup |
+| `bin/test_temporal_filter` | `tests/test_temporal_filter.c` | 12 | Temporal median filter, ring buffer, scene-change reset |
+| `bin/test_confidence` | `tests/test_confidence.c` | 9 | Confidence scoring, JET colorization, edge cases |
 
 ### Conventions
 
