@@ -12,7 +12,7 @@ ag-cam-tools <command> [options]
 |---------|---------|
 | `list` | Discover GigE cameras on the network |
 | `connect` | Connect to a camera and print device information |
-| `capture` | Capture a single stereo frame pair |
+| `capture` | Capture a single stereo frame pair, or a burst sequence |
 | `stream` | Show a live stereo preview |
 | `focus` | Help align manual-focus lenses with live focus scoring |
 | `calibration-capture` | Capture stereo pairs for calibration |
