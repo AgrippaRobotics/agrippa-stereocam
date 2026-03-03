@@ -8,7 +8,7 @@ _ag_cam_tools() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    subcmds="connect list capture stream focus calibration-capture depth-preview-classical depth-preview-neural calibration-stash bounce"
+    subcmds="connect list capture stream focus calibration-capture depth-preview-classical depth-preview-neural depth-capture calibration-stash bounce"
 
     # Complete subcommand as first argument
     if [[ ${COMP_CWORD} -eq 1 ]]; then
@@ -87,6 +87,9 @@ _ag_cam_tools() {
             ;;
         depth-preview-classical|depth-preview-neural)
             COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -f --fps -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size --calibration-local --calibration-slot --stereo-backend --model-path --min-disparity --num-disparities --block-size -h --help" -- "${cur}") )
+            ;;
+        depth-capture)
+            COMPREPLY=( $(compgen -W "-s --serial -a --address -i --interface -o --output -x --exposure -g --gain -A --auto-expose -b --binning -p --packet-size --calibration-local --calibration-slot --max-depth --size -v --verbose -h --help" -- "${cur}") )
             ;;
         calibration-stash)
             # Sub-action completion as second argument

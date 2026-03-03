@@ -271,6 +271,161 @@ void test_extract_dual_bayer_eyes_matches_bin2x2_pipeline (void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tests: round_down_32                                               */
+/* ------------------------------------------------------------------ */
+
+void test_round_down_32_exact (void)
+{
+    TEST_ASSERT_EQUAL_INT (32,  round_down_32 (32));
+    TEST_ASSERT_EQUAL_INT (64,  round_down_32 (64));
+    TEST_ASSERT_EQUAL_INT (640, round_down_32 (640));
+}
+
+void test_round_down_32_non_multiple (void)
+{
+    TEST_ASSERT_EQUAL_INT (0,   round_down_32 (31));
+    TEST_ASSERT_EQUAL_INT (32,  round_down_32 (33));
+    TEST_ASSERT_EQUAL_INT (32,  round_down_32 (63));
+    TEST_ASSERT_EQUAL_INT (1024, round_down_32 (1055));
+}
+
+void test_round_down_32_zero (void)
+{
+    TEST_ASSERT_EQUAL_INT (0, round_down_32 (0));
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tests: crop_center_square                                          */
+/* ------------------------------------------------------------------ */
+
+void test_crop_landscape (void)
+{
+    /* 6x4 -> 4x4 square, center crop removes 1 column each side. */
+    enum { W = 6, H = 4, CH = 1 };
+    guint8 src[W * H];
+    for (int i = 0; i < W * H; i++)
+        src[i] = (guint8) i;
+
+    guint8 dst[H * H];
+    int side = 0;
+    crop_center_square (src, W, H, CH, dst, &side);
+
+    TEST_ASSERT_EQUAL_INT (H, side);
+    /* First row: columns 1..4 of src. */
+    TEST_ASSERT_EQUAL_UINT8 (1, dst[0]);
+    TEST_ASSERT_EQUAL_UINT8 (2, dst[1]);
+    TEST_ASSERT_EQUAL_UINT8 (3, dst[2]);
+    TEST_ASSERT_EQUAL_UINT8 (4, dst[3]);
+}
+
+void test_crop_portrait (void)
+{
+    /* 4x6 -> 4x4 square, center crop removes 1 row each side. */
+    enum { W = 4, H = 6, CH = 1 };
+    guint8 src[W * H];
+    for (int i = 0; i < W * H; i++)
+        src[i] = (guint8) i;
+
+    guint8 dst[W * W];
+    int side = 0;
+    crop_center_square (src, W, H, CH, dst, &side);
+
+    TEST_ASSERT_EQUAL_INT (W, side);
+    /* First row of crop = row 1 of src. */
+    TEST_ASSERT_EQUAL_UINT8 (4, dst[0]);
+    TEST_ASSERT_EQUAL_UINT8 (5, dst[1]);
+    TEST_ASSERT_EQUAL_UINT8 (6, dst[2]);
+    TEST_ASSERT_EQUAL_UINT8 (7, dst[3]);
+}
+
+void test_crop_already_square (void)
+{
+    enum { W = 4, H = 4, CH = 1 };
+    guint8 src[W * H];
+    for (int i = 0; i < W * H; i++)
+        src[i] = (guint8) i;
+
+    guint8 dst[W * H];
+    int side = 0;
+    crop_center_square (src, W, H, CH, dst, &side);
+
+    TEST_ASSERT_EQUAL_INT (W, side);
+    TEST_ASSERT_EQUAL_MEMORY (src, dst, W * H);
+}
+
+void test_crop_rgb (void)
+{
+    /* 6x4 RGB (3 channels) -> 4x4 square. */
+    enum { W = 6, H = 4, CH = 3 };
+    guint8 src[W * H * CH];
+    for (int i = 0; i < W * H * CH; i++)
+        src[i] = (guint8) (i & 0xFF);
+
+    guint8 dst[H * H * CH];
+    int side = 0;
+    crop_center_square (src, W, H, CH, dst, &side);
+    TEST_ASSERT_EQUAL_INT (H, side);
+
+    /* Check first pixel of crop = pixel (1,0) of src. */
+    TEST_ASSERT_EQUAL_UINT8 (src[1 * CH + 0], dst[0]);
+    TEST_ASSERT_EQUAL_UINT8 (src[1 * CH + 1], dst[1]);
+    TEST_ASSERT_EQUAL_UINT8 (src[1 * CH + 2], dst[2]);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tests: resize_nn                                                   */
+/* ------------------------------------------------------------------ */
+
+void test_resize_identity (void)
+{
+    enum { S = 4, CH = 1 };
+    guint8 src[S * S];
+    for (int i = 0; i < S * S; i++)
+        src[i] = (guint8) i;
+
+    guint8 dst[S * S];
+    resize_nn (src, S, CH, dst, S);
+    TEST_ASSERT_EQUAL_MEMORY (src, dst, S * S);
+}
+
+void test_resize_downscale (void)
+{
+    /* 4x4 -> 2x2 NN downscale: picks (0,0), (2,0), (0,2), (2,2). */
+    enum { SRC = 4, DST = 2, CH = 1 };
+    guint8 src[SRC * SRC];
+    for (int y = 0; y < SRC; y++)
+        for (int x = 0; x < SRC; x++)
+            src[y * SRC + x] = (guint8) (y * 10 + x);
+
+    guint8 dst[DST * DST];
+    resize_nn (src, SRC, CH, dst, DST);
+
+    TEST_ASSERT_EQUAL_UINT8 (0,  dst[0]);  /* (0,0) */
+    TEST_ASSERT_EQUAL_UINT8 (2,  dst[1]);  /* (2,0) */
+    TEST_ASSERT_EQUAL_UINT8 (20, dst[2]);  /* (0,2) */
+    TEST_ASSERT_EQUAL_UINT8 (22, dst[3]);  /* (2,2) */
+}
+
+void test_resize_upscale (void)
+{
+    /* 2x2 -> 4x4 NN upscale: each pixel repeated in a 2x2 block. */
+    enum { SRC = 2, DST = 4, CH = 1 };
+    guint8 src[SRC * SRC] = { 10, 20, 30, 40 };
+    guint8 dst[DST * DST];
+    resize_nn (src, SRC, CH, dst, DST);
+
+    /* Top-left 2x2 block should all be 10. */
+    TEST_ASSERT_EQUAL_UINT8 (10, dst[0]);
+    TEST_ASSERT_EQUAL_UINT8 (10, dst[1]);
+    TEST_ASSERT_EQUAL_UINT8 (10, dst[DST]);
+    TEST_ASSERT_EQUAL_UINT8 (10, dst[DST + 1]);
+
+    /* Top-right 2x2 block should all be 20. */
+    TEST_ASSERT_EQUAL_UINT8 (20, dst[2]);
+    TEST_ASSERT_EQUAL_UINT8 (20, dst[3]);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -305,6 +460,22 @@ main (void)
     RUN_TEST (test_debayer_to_gray_matches_rgb_roundtrip);
     RUN_TEST (test_extract_dual_bayer_eyes_matches_deinterleave);
     RUN_TEST (test_extract_dual_bayer_eyes_matches_bin2x2_pipeline);
+
+    /* round_down_32 */
+    RUN_TEST (test_round_down_32_exact);
+    RUN_TEST (test_round_down_32_non_multiple);
+    RUN_TEST (test_round_down_32_zero);
+
+    /* crop_center_square */
+    RUN_TEST (test_crop_landscape);
+    RUN_TEST (test_crop_portrait);
+    RUN_TEST (test_crop_already_square);
+    RUN_TEST (test_crop_rgb);
+
+    /* resize_nn */
+    RUN_TEST (test_resize_identity);
+    RUN_TEST (test_resize_downscale);
+    RUN_TEST (test_resize_upscale);
 
     return UNITY_END ();
 }

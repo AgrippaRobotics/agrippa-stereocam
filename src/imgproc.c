@@ -231,3 +231,41 @@ software_bin_2x2 (const guint8 *src, guint src_w, guint src_h,
         }
     }
 }
+
+/* ================================================================== */
+/*  Square crop and resize                                             */
+/* ================================================================== */
+
+void
+crop_center_square (const guint8 *src, int w, int h, int channels,
+                     guint8 *dst, int *out_side)
+{
+    int side = (w < h) ? w : h;
+    int x0 = (w - side) / 2;
+    int y0 = (h - side) / 2;
+
+    for (int y = 0; y < side; y++) {
+        const guint8 *srow = src + ((size_t) (y0 + y) * w + x0) * channels;
+        guint8 *drow = dst + (size_t) y * side * channels;
+        memcpy (drow, srow, (size_t) side * channels);
+    }
+
+    if (out_side)
+        *out_side = side;
+}
+
+void
+resize_nn (const guint8 *src, int src_side, int channels,
+            guint8 *dst, int dst_side)
+{
+    for (int y = 0; y < dst_side; y++) {
+        int sy = y * src_side / dst_side;
+        for (int x = 0; x < dst_side; x++) {
+            int sx = x * src_side / dst_side;
+            const guint8 *sp = src + ((size_t) sy * src_side + sx) * channels;
+            guint8 *dp = dst + ((size_t) y * dst_side + x) * channels;
+            for (int c = 0; c < channels; c++)
+                dp[c] = sp[c];
+        }
+    }
+}

@@ -32,6 +32,7 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/calib_archive.c \
        $(SRCDIR)/calib_load.c \
        $(SRCDIR)/cmd_calibration_stash.c \
+       $(SRCDIR)/cmd_depth_capture.c \
        $(SRCDIR)/cmd_bounce.c \
        $(SRCDIR)/burst.c
 
