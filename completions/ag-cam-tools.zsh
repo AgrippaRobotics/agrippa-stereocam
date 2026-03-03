@@ -54,6 +54,7 @@ _ag_cam_tools_capture() {
         '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
         '(--calibration-slot)--calibration-local=[calibration session folder]:session:_ag_cam_tools_calib_local_sessions' \
         '(--calibration-local)--calibration-slot=[on-camera calibration slot]:slot:(0 1 2)' \
+        '--burst=[burst capture N frames]:count:' \
         '(-v --verbose)'{-v,--verbose}'[print diagnostic readback]' \
         '(-h --help)'{-h,--help}'[print this help]'
 }
@@ -134,6 +135,27 @@ _ag_cam_tools_depth_preview() {
         '(-h --help)'{-h,--help}'[print this help]'
 }
 
+_ag_cam_tools_depth_capture() {
+    _arguments \
+        '(-a --address)-s[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-a --address)--serial=[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
+        '(-s --serial)-a[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-s --serial)--address=[connect by camera IP]:address:_ag_cam_tools_cameras_address' \
+        '(-i --interface)'{-i,--interface}'=[force NIC selection]:interface:_net_interfaces' \
+        '(-o --output)'{-o,--output}'=[output directory]:directory:_directories' \
+        '(-x --exposure)'{-x,--exposure}'=[exposure time in microseconds]:microseconds:' \
+        '(-g --gain)'{-g,--gain}'=[sensor gain in dB]:gain:' \
+        '(-A --auto-expose)'{-A,--auto-expose}'[auto-expose then lock]' \
+        '(-b --binning)'{-b,--binning}'=[sensor binning factor]:factor:(1 2)' \
+        '(-p --packet-size)'{-p,--packet-size}'=[GigE packet size]:bytes:' \
+        '(--calibration-slot)--calibration-local=[calibration session folder]:session:_ag_cam_tools_calib_local_sessions' \
+        '(--calibration-local)--calibration-slot=[on-camera calibration slot]:slot:(0 1 2)' \
+        '--max-depth=[maximum depth for alpha normalisation in cm]:cm:' \
+        '--size=[output side length, must be multiple of 32]:pixels:' \
+        '(-v --verbose)'{-v,--verbose}'[print diagnostic readback]' \
+        '(-h --help)'{-h,--help}'[print this help]'
+}
+
 _ag_cam_tools_bounce() {
     _arguments \
         '(-a --address)-s[match by serial number]:serial:_ag_cam_tools_cameras_serial' \
@@ -183,6 +205,7 @@ _ag_cam_tools() {
         'calibration-capture:Interactive stereo pair capture for calibration'
         'depth-preview-classical:Live depth map with classical backend controls'
         'depth-preview-neural:Live depth map with neural backend controls'
+        'depth-capture:Capture RGBA depth map (RGB + depth alpha)'
         'calibration-stash:Upload/list/delete calibration data on camera'
         'bounce:Reset (power-cycle) the camera over GigE'
     )
@@ -199,6 +222,7 @@ _ag_cam_tools() {
             calibration-capture) _ag_cam_tools_calibration_capture ;;
             depth-preview-classical) _ag_cam_tools_depth_preview ;;
             depth-preview-neural) _ag_cam_tools_depth_preview ;;
+            depth-capture) _ag_cam_tools_depth_capture ;;
             calibration-stash) _ag_cam_tools_calibration_stash ;;
             bounce) _ag_cam_tools_bounce ;;
         esac

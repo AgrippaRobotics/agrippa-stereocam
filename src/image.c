@@ -118,6 +118,36 @@ write_gray_image (AgEncFormat enc, const char *path,
     return EXIT_SUCCESS;
 }
 
+int
+write_rgba_png (const char *path,
+                const guint8 *rgb, const guint8 *alpha,
+                guint width, guint height)
+{
+    size_t n = (size_t) width * (size_t) height;
+    guint8 *rgba = g_malloc (n * 4);
+    if (!rgba) {
+        fprintf (stderr, "error: out of memory for RGBA buffer\n");
+        return EXIT_FAILURE;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        rgba[i * 4 + 0] = rgb[i * 3 + 0];
+        rgba[i * 4 + 1] = rgb[i * 3 + 1];
+        rgba[i * 4 + 2] = rgb[i * 3 + 2];
+        rgba[i * 4 + 3] = alpha[i];
+    }
+
+    int ok = stbi_write_png (path, (int) width, (int) height, 4, rgba,
+                             (int) width * 4);
+    g_free (rgba);
+
+    if (!ok) {
+        fprintf (stderr, "error: failed to write '%s'\n", path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
 /*
  * Write a single rectified image (RGB24 data already gamma-corrected,
  * debayered, and remapped).

@@ -25,6 +25,7 @@ nav:
       - calibration-capture: cli/calibration-capture.md
       - depth-preview-classical: cli/depth-preview-classical.md
       - depth-preview-neural: cli/depth-preview-neural.md
+      - depth-capture: cli/depth-capture.md
       - calibration-stash: cli/calibration-stash.md
       - bounce: cli/bounce.md
   - Workflows:

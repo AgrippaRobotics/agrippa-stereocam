@@ -18,6 +18,7 @@ int cmd_calibration_capture (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_depth_preview_classical (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_depth_preview_neural (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_calibration_stash (int argc, char *argv[], arg_dstr_t res, void *ctx);
+int cmd_depth_capture (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_bounce (int argc, char *argv[], arg_dstr_t res, void *ctx);
 
 static void
@@ -42,6 +43,8 @@ print_usage (void)
             "            Live depth map with neural backend controls\n"
             "  calibration-stash\n"
             "            Upload/list/delete calibration data on camera\n"
+            "  depth-capture\n"
+            "            Capture RGBA depth map (RGB + depth alpha)\n"
             "  bounce    Reset (power-cycle) the camera over GigE\n"
             "\n"
             "Run 'ag-cam-tools <command> --help' for command-specific options.\n");
@@ -72,6 +75,8 @@ main (int argc, char *argv[])
                       "Live depth map with neural backend controls", NULL);
     arg_cmd_register ("calibration-stash", cmd_calibration_stash,
                       "Upload/list/delete calibration data on camera", NULL);
+    arg_cmd_register ("depth-capture", cmd_depth_capture,
+                      "Capture RGBA depth map (RGB + depth alpha)", NULL);
     arg_cmd_register ("bounce", cmd_bounce,
                       "Reset (power-cycle) the camera over GigE", NULL);
 

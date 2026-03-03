@@ -42,4 +42,24 @@ void extract_dual_bayer_eyes (const guint8 *interleaved, guint width,
 void software_bin_2x2 (const guint8 *src, guint src_w, guint src_h,
                         guint8 *dst, guint dst_w, guint dst_h);
 
+/* --- Square crop and resize for depth export --- */
+
+/* Round down to the nearest multiple of 32. */
+static inline int round_down_32 (int x) { return x & ~31; }
+
+/*
+ * Center-crop src (w x h, `channels` per pixel) to the largest
+ * inscribed square.  Writes the cropped square into dst.
+ * Returns the side length of the square via *out_side.
+ */
+void crop_center_square (const guint8 *src, int w, int h, int channels,
+                          guint8 *dst, int *out_side);
+
+/*
+ * Nearest-neighbour resize from src_side x src_side to
+ * dst_side x dst_side.  Works for any channel count.
+ */
+void resize_nn (const guint8 *src, int src_side, int channels,
+                 guint8 *dst, int dst_side);
+
 #endif /* AG_IMGPROC_H */

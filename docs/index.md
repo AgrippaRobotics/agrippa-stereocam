@@ -23,14 +23,16 @@ Use it for:
 
 `ag-cam-tools` currently supports:
 
-- discovering and connecting to Lucid stereo cameras,
-- single-frame stereo capture,
-- live SDL preview,
-- focus tuning with live scoring and optional audio feedback,
-- calibration dataset capture,
-- rectified disparity preview,
-- ONNX-based stereo inference,
-- calibration archive storage on the camera.
+- **Discovery and connection** — find and connect to Lucid GigE stereo cameras on the network, with serial, address, and NIC selection.
+- **Stereo capture** — single-frame or burst-mode (`--burst N`) stereo pair capture with optional rectification. Burst mode uses FrameBurstStart triggering for rapid multi-frame acquisition.
+- **Live preview** — real-time SDL stereo display with optional AprilTag detection and rectification overlay.
+- **Focus tuning** — live per-eye focus scoring with selectable metrics (Laplacian, Tenengrad, Brenner), region-of-interest control, and procedural stereo audio feedback for hands-free lens alignment.
+- **Calibration capture** — interactive stereo pair acquisition for calibration datasets, with audio confirmation cues.
+- **Depth preview** — rectified disparity visualization with classical (SGBM) and neural (ONNX) stereo backends, plus live parameter tuning.
+- **Depth capture** — export RGBA PNGs with camera colour in RGB and normalised depth in the alpha channel, square-cropped and sized for ML training pipelines.
+- **Calibration storage** — upload, download, and manage calibration archives directly on the camera.
+- **Camera reset** — power-cycle cameras over GigE with `bounce`.
+- **Binning-aware pipeline** — automatic grayscale handling when `2x2` sensor binning collapses the Bayer pattern.
 
 ## Project links
 

@@ -12,13 +12,15 @@ ag-cam-tools <command> [options]
 |---------|---------|
 | `list` | Discover GigE cameras on the network |
 | `connect` | Connect to a camera and print device information |
-| `capture` | Capture a single stereo frame pair |
+| `capture` | Capture a single stereo frame pair, or a burst sequence |
 | `stream` | Show a live stereo preview |
 | `focus` | Help align manual-focus lenses with live focus scoring |
 | `calibration-capture` | Capture stereo pairs for calibration |
 | `depth-preview-classical` | Show rectified disparity with classical stereo |
 | `depth-preview-neural` | Show rectified disparity with ONNX stereo |
+| `depth-capture` | Capture RGBA depth map (RGB + depth alpha) for ML export |
 | `calibration-stash` | Store and retrieve calibration archives on-camera |
+| `bounce` | Reset (power-cycle) the camera over GigE |
 
 ## Common device selection options
 
@@ -39,4 +41,6 @@ Most commands accept:
 - [calibration-capture](calibration-capture.md)
 - [depth-preview-classical](depth-preview-classical.md)
 - [depth-preview-neural](depth-preview-neural.md)
+- [depth-capture](depth-capture.md)
 - [calibration-stash](calibration-stash.md)
+- [bounce](bounce.md)

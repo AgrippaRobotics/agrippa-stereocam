@@ -285,6 +285,36 @@ void test_color_jpg_magic (void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tests: write_rgba_png                                              */
+/* ------------------------------------------------------------------ */
+
+void test_rgba_png_magic (void)
+{
+    enum { W = 8, H = 8 };
+    guint8 rgb[W * H * 3];
+    guint8 alpha[W * H];
+    memset (rgb, 128, sizeof (rgb));
+    memset (alpha, 200, sizeof (alpha));
+
+    char path[512];
+    snprintf (path, sizeof (path), "%s/rgba.png", tmpdir);
+    TEST_ASSERT_EQUAL_INT (EXIT_SUCCESS, write_rgba_png (path, rgb, alpha, W, H));
+
+    TEST_ASSERT_TRUE (file_size (path) > 0);
+    unsigned char png_magic[] = { 0x89, 'P', 'N', 'G' };
+    TEST_ASSERT_TRUE (file_starts_with (path, png_magic, 4));
+}
+
+void test_rgba_png_bad_path (void)
+{
+    guint8 rgb[12] = {0};
+    guint8 alpha[4] = {0};
+    TEST_ASSERT_EQUAL_INT (EXIT_FAILURE,
+                           write_rgba_png ("/no/such/dir/bad.png",
+                                           rgb, alpha, 2, 2));
+}
+
+/* ------------------------------------------------------------------ */
 /*  Tests: write_dual_bayer_pair — full DualBayer pipeline              */
 /* ------------------------------------------------------------------ */
 
@@ -422,6 +452,10 @@ main (void)
     /* write_color_suite */
     RUN_TEST (test_color_png_magic);
     RUN_TEST (test_color_jpg_magic);
+
+    /* write_rgba_png */
+    RUN_TEST (test_rgba_png_magic);
+    RUN_TEST (test_rgba_png_bad_path);
 
     /* write_dual_suite */
     RUN_TEST (test_dual_odd_width_rejected);

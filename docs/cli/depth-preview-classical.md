@@ -92,3 +92,7 @@ When `--stereo-backend sgbm` is active, live tuning is available:
 | `,` / `.` | `disp12_max_diff` |
 | `9` / `0` | `mode` |
 | `p` | Print the current parameter set |
+
+## Notes
+
+- When the camera reports that post-binning data is no longer Bayer, the image is fed to the disparity pipeline as grayscale directly, skipping debayering.
