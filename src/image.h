@@ -42,6 +42,15 @@ int write_rgba_png (const char *path,
                     const guint8 *rgb, const guint8 *alpha,
                     guint width, guint height);
 
+/*
+ * When HAVE_APRILTAG is defined, AprilTag overlay structs can be
+ * passed for drawing onto captured images.  Forward-declare the
+ * struct so the header works without the apriltag includes.
+ */
+#ifdef HAVE_APRILTAG
+#include "apriltag_detect.h"
+#endif
+
 int write_dual_bayer_pair (const char *output_dir,
                            const char *basename_no_ext,
                            const guint8 *interleaved,
@@ -50,6 +59,8 @@ int write_dual_bayer_pair (const char *output_dir,
                            int software_binning,
                            gboolean data_is_bayer,
                            const AgRemapTable *remap_left,
-                           const AgRemapTable *remap_right);
+                           const AgRemapTable *remap_right,
+                           const void *left_tags, int n_left_tags,
+                           const void *right_tags, int n_right_tags);
 
 #endif /* AG_IMAGE_H */

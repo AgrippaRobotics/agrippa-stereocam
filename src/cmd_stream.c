@@ -9,6 +9,7 @@
 #include "common.h"
 #include "apriltag_detect.h"
 #include "calib_load.h"
+#include "font.h"
 #include "remap.h"
 #include "../vendor/argtable3.h"
 
@@ -67,17 +68,21 @@ stream_loop (const char *device_id, const char *iface_ip,
 
 #ifdef HAVE_APRILTAG
     /* AprilTag detector setup. */
-    apriltag_detector_t *at_detector = NULL;
-    apriltag_family_t   *at_family   = NULL;
+    AgApriltagContext *at_ctx = NULL;
+    AgTagTracker *tracker_left  = NULL;
+    AgTagTracker *tracker_right = NULL;
     double at_fx = 0, at_fy = 0, at_cx = 0, at_cy = 0;
 
     if (tag_size_m > 0.0) {
-        at_detector = ag_apriltag_detector_create (&at_family);
+        at_ctx = ag_apriltag_create ();
         ag_apriltag_estimate_intrinsics (proc_sub_w, proc_h,
                                          &at_fx, &at_fy, &at_cx, &at_cy);
 
-        printf ("AprilTag: tagStandard52h13, tag_size=%.3f m, "
-                "fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n",
+        tracker_left  = ag_tag_tracker_create ("left",  5.0, 0.01, 10);
+        tracker_right = ag_tag_tracker_create ("right", 5.0, 0.01, 10);
+
+        printf ("AprilTag: tagStandard52h13 + tagStandard41h12, "
+                "tag_size=%.3f m, fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n",
                 tag_size_m, at_fx, at_fy, at_cx, at_cy);
     }
 #else
@@ -189,6 +194,7 @@ stream_loop (const char *device_id, const char *iface_ip,
 
     guint64 frames_displayed = 0;
     guint64 frames_dropped   = 0;
+    G_GNUC_UNUSED guint64 total_frames = 0;   /* monotonic, never resets */
     const guint8 *gamma_lut  = gamma_lut_2p5 ();
     GTimer *stats_timer = g_timer_new ();
 
@@ -269,19 +275,24 @@ stream_loop (const char *device_id, const char *iface_ip,
         int n_left_tags = 0, n_right_tags = 0;
         AgTagOverlay left_tags[AG_MAX_TAG_OVERLAYS];
         AgTagOverlay right_tags[AG_MAX_TAG_OVERLAYS];
-        if (at_detector) {
+        if (at_ctx) {
             n_left_tags = ag_detect_tags_and_pose (
-                at_detector, bayer_left,
+                at_ctx->detector, bayer_left,
                 proc_sub_w, proc_h, tag_size_m,
                 at_fx, at_fy, at_cx, at_cy,
-                frames_displayed, "left",
-                left_tags, AG_MAX_TAG_OVERLAYS);
+                total_frames, "left",
+                left_tags, AG_MAX_TAG_OVERLAYS, TRUE);
             n_right_tags = ag_detect_tags_and_pose (
-                at_detector, bayer_right,
+                at_ctx->detector, bayer_right,
                 proc_sub_w, proc_h, tag_size_m,
                 at_fx, at_fy, at_cx, at_cy,
-                frames_displayed, "right",
-                right_tags, AG_MAX_TAG_OVERLAYS);
+                total_frames, "right",
+                right_tags, AG_MAX_TAG_OVERLAYS, TRUE);
+
+            ag_tag_tracker_update (tracker_left,  left_tags,  n_left_tags,  total_frames);
+            ag_tag_tracker_update (tracker_right, right_tags, n_right_tags, total_frames);
+            ag_tag_tracker_check_disappeared (tracker_left,  total_frames);
+            ag_tag_tracker_check_disappeared (tracker_right, total_frames);
         }
 #endif
 
@@ -324,7 +335,7 @@ stream_loop (const char *device_id, const char *iface_ip,
         SDL_RenderCopy (renderer, texture, NULL, NULL);
 
 #ifdef HAVE_APRILTAG
-        /* Draw detected tag outlines as quadrilaterals.
+        /* Draw detected tag outlines as quadrilaterals with ID labels.
          * Tag corner coords are in per-eye pixel space; we must map them
          * to the renderer's logical output which may be scaled by the
          * window size.  SDL_RenderCopy stretches the texture to fill the
@@ -346,6 +357,11 @@ stream_loop (const char *device_id, const char *iface_ip,
                         (int) (left_tags[t].p[nc][0] * sx),
                         (int) (left_tags[t].p[nc][1] * sy));
                 }
+                char label[16];
+                snprintf (label, sizeof label, "%d", left_tags[t].id);
+                int lx = (int) (left_tags[t].center[0] * sx);
+                int ly = (int) (left_tags[t].center[1] * sy) - 16;
+                ag_font_render (renderer, label, lx, ly, 2, 0, 255, 0);
             }
 
             for (int t = 0; t < n_right_tags; t++) {
@@ -358,6 +374,11 @@ stream_loop (const char *device_id, const char *iface_ip,
                         (int) ((right_tags[t].p[nc][0] + x_off) * sx),
                         (int) ( right_tags[t].p[nc][1]          * sy));
                 }
+                char label[16];
+                snprintf (label, sizeof label, "%d", right_tags[t].id);
+                int lx = (int) ((right_tags[t].center[0] + x_off) * sx);
+                int ly = (int) (right_tags[t].center[1] * sy) - 16;
+                ag_font_render (renderer, label, lx, ly, 2, 0, 255, 0);
             }
         }
 #endif
@@ -365,6 +386,7 @@ stream_loop (const char *device_id, const char *iface_ip,
         SDL_RenderPresent (renderer);
 
         frames_displayed++;
+        total_frames++;
 
         double elapsed = g_timer_elapsed (stats_timer, NULL);
         if (elapsed >= 5.0) {
@@ -397,7 +419,9 @@ cleanup:
     SDL_DestroyWindow (window);
     SDL_Quit ();
 #ifdef HAVE_APRILTAG
-    ag_apriltag_detector_destroy (at_detector, at_family);
+    ag_tag_tracker_destroy (tracker_left);
+    ag_tag_tracker_destroy (tracker_right);
+    ag_apriltag_destroy (at_ctx);
 #endif
     g_object_unref (cfg.stream);
     g_object_unref (camera);
@@ -433,24 +457,15 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                             "rectify using local calibration session");
     struct arg_int *calib_slot  = arg_int0 (NULL, "calibration-slot", "<0-2>",
                                             "rectify using on-camera calibration slot");
-#ifdef HAVE_APRILTAG
     struct arg_dbl *tag_size  = arg_dbl0 ("t", "tag-size",  "<meters>",
                                           "AprilTag size in meters (enables detection)");
-#endif
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
 
-#ifdef HAVE_APRILTAG
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
                          gain, auto_exp, binning_a, pkt_size,
                          calib_local, calib_slot,
                          tag_size, help, end };
-#else
-    void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
-                         gain, auto_exp, binning_a, pkt_size,
-                         calib_local, calib_slot,
-                         help, end };
-#endif
 
     int exitcode = EXIT_SUCCESS;
     if (arg_nullcheck (argtable) != 0) {
@@ -554,6 +569,10 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
             goto done;
         }
     }
+#else
+    if (tag_size->count)
+        fprintf (stderr,
+                 "warning: --tag-size ignored (compiled without AprilTag support)\n");
 #endif
 
     const char *opt_serial    = serial->count    ? serial->sval[0]    : NULL;

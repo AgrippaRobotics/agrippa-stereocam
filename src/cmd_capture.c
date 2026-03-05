@@ -236,7 +236,12 @@ capture_one_frame (const char *device_id, const char *output_dir,
         const char *pixel_format = arv_device_get_string_feature_value (
                                        device, "PixelFormat", NULL);
         if (pixel_format && strcmp (pixel_format, "DualBayerRG8") == 0) {
+            const void *ov_left = NULL, *ov_right = NULL;
+            int n_ltags = 0, n_rtags = 0;
+
 #ifdef HAVE_APRILTAG
+            AgTagOverlay left_ov[AG_MAX_TAG_OVERLAYS];
+            AgTagOverlay right_ov[AG_MAX_TAG_OVERLAYS];
             if (tag_size_m > 0.0) {
                 guint sub_w = (width / 2) / (guint) cfg.software_binning;
                 guint sub_h = height / (guint) cfg.software_binning;
@@ -247,25 +252,24 @@ capture_one_frame (const char *device_id, const char *output_dir,
                                           cfg.software_binning,
                                           tag_left, tag_right);
 
-                apriltag_family_t   *at_family   = NULL;
-                apriltag_detector_t *at_detector  = ag_apriltag_detector_create (&at_family);
+                AgApriltagContext *at_ctx = ag_apriltag_create ();
                 double fx, fy, cx, cy;
                 ag_apriltag_estimate_intrinsics (sub_w, sub_h,
                                                  &fx, &fy, &cx, &cy);
 
-                AgTagOverlay overlays[AG_MAX_TAG_OVERLAYS];
-                ag_detect_tags_and_pose (at_detector, tag_left,
-                                         sub_w, sub_h, tag_size_m,
-                                         fx, fy, cx, cy,
-                                         0, "left",
-                                         overlays, AG_MAX_TAG_OVERLAYS);
-                ag_detect_tags_and_pose (at_detector, tag_right,
-                                         sub_w, sub_h, tag_size_m,
-                                         fx, fy, cx, cy,
-                                         0, "right",
-                                         overlays, AG_MAX_TAG_OVERLAYS);
+                n_ltags = ag_detect_tags_and_pose (at_ctx->detector,
+                             tag_left, sub_w, sub_h, tag_size_m,
+                             fx, fy, cx, cy, 0, "left",
+                             left_ov, AG_MAX_TAG_OVERLAYS, FALSE);
+                n_rtags = ag_detect_tags_and_pose (at_ctx->detector,
+                             tag_right, sub_w, sub_h, tag_size_m,
+                             fx, fy, cx, cy, 0, "right",
+                             right_ov, AG_MAX_TAG_OVERLAYS, FALSE);
 
-                ag_apriltag_detector_destroy (at_detector, at_family);
+                ov_left  = left_ov;
+                ov_right = right_ov;
+
+                ag_apriltag_destroy (at_ctx);
                 g_free (tag_left);
                 g_free (tag_right);
             }
@@ -275,7 +279,9 @@ capture_one_frame (const char *device_id, const char *output_dir,
             rc = write_dual_bayer_pair (output_dir, base, data, width, height,
                                         enc, cfg.software_binning,
                                         cfg.data_is_bayer,
-                                        remap_left, remap_right);
+                                        remap_left, remap_right,
+                                        ov_left, n_ltags,
+                                        ov_right, n_rtags);
         } else {
             const char *ext = (enc == AG_ENC_PNG) ? "png"
                             : (enc == AG_ENC_JPG) ? "jpg" : "pgm";
@@ -486,25 +492,16 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                             "rectify using local calibration session");
     struct arg_int *calib_slot  = arg_int0 (NULL, "calibration-slot", "<0-2>",
                                             "rectify using on-camera calibration slot");
-#ifdef HAVE_APRILTAG
     struct arg_dbl *tag_size  = arg_dbl0 ("t", "tag-size",  "<meters>",
                                           "AprilTag size in meters (enables detection)");
-#endif
     struct arg_lit *verbose   = arg_lit0 ("v", "verbose",
                                           "print diagnostic readback");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
-#ifdef HAVE_APRILTAG
     void *argtable[] = { cmd, serial, address, interface, output, encode,
                          exposure, gain, auto_exp, binning_a, pkt_size,
                          burst, calib_local, calib_slot,
                          tag_size, verbose, help, end };
-#else
-    void *argtable[] = { cmd, serial, address, interface, output, encode,
-                         exposure, gain, auto_exp, binning_a, pkt_size,
-                         burst, calib_local, calib_slot,
-                         verbose, help, end };
-#endif
 
     int exitcode = EXIT_SUCCESS;
     if (arg_nullcheck (argtable) != 0) {
@@ -615,6 +612,10 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
             goto done;
         }
     }
+#else
+    if (tag_size->count)
+        fprintf (stderr,
+                 "warning: --tag-size ignored (compiled without AprilTag support)\n");
 #endif
 
     /* Validate encode format. */

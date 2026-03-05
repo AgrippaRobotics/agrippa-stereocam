@@ -40,7 +40,8 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/cmd_depth_capture.c \
        $(SRCDIR)/cmd_bounce.c \
        $(SRCDIR)/burst.c \
-       $(SRCDIR)/apriltag_detect.c
+       $(SRCDIR)/apriltag_detect.c \
+       $(SRCDIR)/overlay.c
 
 VENDOR_SRCS = $(VENDORDIR)/argtable3.c \
               $(VENDORDIR)/cJSON.c
@@ -70,6 +71,7 @@ else ifneq ($(wildcard $(VENDORDIR)/apriltag/apriltag.h),)
                   $(APRILTAG_DIR)/apriltag_quad_thresh.c \
                   $(APRILTAG_DIR)/apriltag_pose.c \
                   $(APRILTAG_DIR)/tagStandard52h13.c \
+                  $(APRILTAG_DIR)/tagStandard41h12.c \
                   $(wildcard $(APRILTAG_DIR)/common/*.c)
   APRILTAG_OBJS = $(patsubst $(APRILTAG_DIR)/%.c,$(BINDIR)/apriltag/%.o,$(APRILTAG_SRCS))
 endif

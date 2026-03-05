@@ -326,7 +326,8 @@ void test_dual_odd_width_rejected (void)
                            write_dual_bayer_pair (tmpdir, "bad", buf,
                                                   5, 3,  /* odd width */
                                                   AG_ENC_PNG, 0, TRUE,
-                                                  NULL, NULL));
+                                                  NULL, NULL,
+                                                  NULL, 0, NULL, 0));
 }
 
 void test_dual_produces_left_right_png (void)
@@ -339,7 +340,8 @@ void test_dual_produces_left_right_png (void)
     TEST_ASSERT_EQUAL_INT (EXIT_SUCCESS,
                            write_dual_bayer_pair (tmpdir, "pair", interleaved,
                                                   TOTAL_W, H, AG_ENC_PNG,
-                                                  0, TRUE, NULL, NULL));
+                                                  0, TRUE, NULL, NULL,
+                                                  NULL, 0, NULL, 0));
 
     char left_path[512], right_path[512];
     snprintf (left_path,  sizeof (left_path),  "%s/pair_left.png",  tmpdir);
@@ -362,7 +364,8 @@ void test_dual_produces_pgm (void)
     TEST_ASSERT_EQUAL_INT (EXIT_SUCCESS,
                            write_dual_bayer_pair (tmpdir, "pgmpair", interleaved,
                                                   TOTAL_W, H, AG_ENC_PGM,
-                                                  0, TRUE, NULL, NULL));
+                                                  0, TRUE, NULL, NULL,
+                                                  NULL, 0, NULL, 0));
 
     char left_path[512], right_path[512];
     snprintf (left_path,  sizeof (left_path),  "%s/pgmpair_left.pgm",  tmpdir);
@@ -388,7 +391,8 @@ void test_dual_with_binning (void)
     TEST_ASSERT_EQUAL_INT (EXIT_SUCCESS,
                            write_dual_bayer_pair (tmpdir, "binned", interleaved,
                                                   TOTAL_W, H, AG_ENC_PGM,
-                                                  2, FALSE, NULL, NULL));
+                                                  2, FALSE, NULL, NULL,
+                                                  NULL, 0, NULL, 0));
 
     char left_path[512];
     snprintf (left_path, sizeof (left_path), "%s/binned_left.pgm", tmpdir);
@@ -417,7 +421,8 @@ void test_dual_gray_no_bayer_flag (void)
     TEST_ASSERT_EQUAL_INT (EXIT_SUCCESS,
                            write_dual_bayer_pair (tmpdir, "gray", interleaved,
                                                   TOTAL_W, H, AG_ENC_PNG,
-                                                  0, FALSE, NULL, NULL));
+                                                  0, FALSE, NULL, NULL,
+                                                  NULL, 0, NULL, 0));
 
     char left_path[512];
     snprintf (left_path, sizeof (left_path), "%s/gray_left.png", tmpdir);

@@ -7,6 +7,7 @@
 
 #include "image.h"
 #include "common.h"
+#include "overlay.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -179,8 +180,14 @@ write_dual_bayer_pair (const char *output_dir,
                        int software_binning,
                        gboolean data_is_bayer,
                        const AgRemapTable *remap_left,
-                       const AgRemapTable *remap_right)
+                       const AgRemapTable *remap_right,
+                       const void *left_tags, int n_left_tags,
+                       const void *right_tags, int n_right_tags)
 {
+#ifndef HAVE_APRILTAG
+    (void) left_tags;  (void) n_left_tags;
+    (void) right_tags; (void) n_right_tags;
+#endif
     if (width % 2 != 0) {
         fprintf (stderr, "error: DualBayer frame width must be even, got %u\n",
                  width);
@@ -280,6 +287,29 @@ write_dual_bayer_pair (const char *output_dir,
     } else if (!data_is_bayer) {
         rc_left  = write_gray_image (enc, left_path,  left,  dst_w, dst_h);
         rc_right = write_gray_image (enc, right_path, right, dst_w, dst_h);
+#ifdef HAVE_APRILTAG
+    } else if (n_left_tags > 0 || n_right_tags > 0) {
+        /* Debayer manually so we can draw overlays before encoding. */
+        apply_lut_inplace (left,  eye_n, gamma_lut_2p5 ());
+        apply_lut_inplace (right, eye_n, gamma_lut_2p5 ());
+
+        guint8 *rgb_l = g_malloc (eye_n * 3);
+        guint8 *rgb_r = g_malloc (eye_n * 3);
+        debayer_rg8_to_rgb (left,  rgb_l, dst_w, dst_h);
+        debayer_rg8_to_rgb (right, rgb_r, dst_w, dst_h);
+
+        ag_overlay_tags_rgb (rgb_l, dst_w, dst_h,
+                             (const AgTagOverlay *) left_tags,
+                             n_left_tags, 0, 255, 0);
+        ag_overlay_tags_rgb (rgb_r, dst_w, dst_h,
+                             (const AgTagOverlay *) right_tags,
+                             n_right_tags, 0, 255, 0);
+
+        rc_left  = write_rgb_image_raw (enc, left_path,  rgb_l, dst_w, dst_h);
+        rc_right = write_rgb_image_raw (enc, right_path, rgb_r, dst_w, dst_h);
+        g_free (rgb_l);
+        g_free (rgb_r);
+#endif
     } else {
         rc_left  = write_color_image (enc, left_path,  left,  dst_w, dst_h);
         rc_right = write_color_image (enc, right_path, right, dst_w, dst_h);
