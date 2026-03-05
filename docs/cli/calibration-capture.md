@@ -34,8 +34,11 @@ ag-cam-tools calibration-capture -a 192.168.0.201 -q
 Each session creates a unique output directory named like:
 
 ```text
-calibration_<datetime>_<md5>
+calibration_<serial>_<datetime>_<md5>
 ```
+
+The serial number is read from the camera after connection. This makes it
+easy to identify which camera produced each calibration dataset.
 
 Within it, images are saved into:
 

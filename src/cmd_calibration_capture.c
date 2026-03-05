@@ -94,7 +94,36 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
                           gboolean auto_expose, int packet_size, int binning,
                           gboolean enable_audio)
 {
-    /* Build a unique session folder: calibration_<datetime>_<md5_prefix>
+    GError *error = NULL;
+    ArvCamera *camera = arv_camera_new (device_id, &error);
+    if (!camera) {
+        fprintf (stderr, "error: %s\n",
+                 error ? error->message : "failed to open device");
+        g_clear_error (&error);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
+    printf ("Connected.\n");
+
+    AgCameraConfig cfg;
+    if (camera_configure (camera, AG_MODE_CONTINUOUS,
+                          binning, exposure_us, gain_db, auto_expose,
+                          packet_size, iface_ip, FALSE, &cfg) != EXIT_SUCCESS) {
+        g_object_unref (camera);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
+    ArvDevice *device = arv_camera_get_device (camera);
+
+    /* Query the camera serial number for the session folder name. */
+    const char *camera_serial = arv_device_get_string_feature_value (
+                                    device, "DeviceSerialNumber", NULL);
+    if (!camera_serial || camera_serial[0] == '\0')
+        camera_serial = "unknown";
+
+    /* Build a unique session folder: calibration_<serial>_<datetime>_<md5>
      * where the MD5 is derived from the capture parameters so identical
      * settings produce the same hash prefix. */
     char param_str[256];
@@ -117,35 +146,10 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
 
     char session_name[128];
     snprintf (session_name, sizeof session_name,
-              "calibration_%s_%s", dt_str, md5_prefix);
+              "calibration_%s_%s_%s", camera_serial, dt_str, md5_prefix);
     g_free (dt_str);
 
     char *session_dir = g_build_filename (output_dir, session_name, NULL);
-
-    GError *error = NULL;
-    ArvCamera *camera = arv_camera_new (device_id, &error);
-    if (!camera) {
-        fprintf (stderr, "error: %s\n",
-                 error ? error->message : "failed to open device");
-        g_clear_error (&error);
-        g_free (session_dir);
-        arv_shutdown ();
-        return EXIT_FAILURE;
-    }
-
-    printf ("Connected.\n");
-
-    AgCameraConfig cfg;
-    if (camera_configure (camera, AG_MODE_CONTINUOUS,
-                          binning, exposure_us, gain_db, auto_expose,
-                          packet_size, iface_ip, FALSE, &cfg) != EXIT_SUCCESS) {
-        g_free (session_dir);
-        g_object_unref (camera);
-        arv_shutdown ();
-        return EXIT_FAILURE;
-    }
-
-    ArvDevice *device = arv_camera_get_device (camera);
 
     /* Compute dimensions. */
     guint src_sub_w  = cfg.frame_w / 2;
