@@ -1,9 +1,18 @@
 /*
  * calib_archive.h — calibration data archive for on-camera storage
  *
- * Packs remap_left.bin, remap_right.bin, and calibration_meta.json from
+ * Packs raw calibration matrices (.npy) and calibration_meta.json from
  * a calibration session folder into a single flat archive suitable for
  * storage in the camera's ~11 MB UserFile.
+ *
+ * Archived .npy files (stored as opaque blobs):
+ *   cam_mats_left.npy / cam_mats_right.npy     — 3×3 camera matrices (K)
+ *   dist_coefs_left.npy / dist_coefs_right.npy  — distortion coefficients
+ *   rect_trans_left.npy / rect_trans_right.npy   — 3×3 rectification (R)
+ *   proj_mats_left.npy / proj_mats_right.npy     — 3×4 projection (P)
+ *
+ * On unpack, remap tables are computed from the matrices via
+ * ag_remap_from_calib() (equivalent to cv::initUndistortRectifyMap).
  *
  * Inner archive format (AGCAL, little-endian):
  *
@@ -111,10 +120,8 @@ int ag_calib_archive_list_header (const uint8_t *data, size_t len);
  * Extract an on-camera blob to a session directory on disk.
  * Accepts AGST (header + AGCZ), bare AGCZ, or raw AGCAL.
  *
- * Creates output_dir/calib_result/ and writes:
- *   remap_left.bin        (standard 4-byte-per-offset RMAP format)
- *   remap_right.bin       (standard 4-byte-per-offset RMAP format)
- *   calibration_meta.json (verbatim from archive)
+ * Creates output_dir/calib_result/ and writes all archive entries
+ * verbatim (calibration_meta.json and .npy matrix files).
  *
  * Returns 0 on success, -1 on error.
  */

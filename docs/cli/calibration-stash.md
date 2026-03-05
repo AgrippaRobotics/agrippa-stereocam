@@ -37,12 +37,14 @@ ag-cam-tools calibration-stash purge
 
 ## Storage format notes
 
-The upload path reads:
+The upload path reads the following files from the session's `calib_result/` directory:
 
-- `remap_left.bin`
-- `remap_right.bin`
 - `calibration_meta.json`
+- `cam_mats_left.npy` / `cam_mats_right.npy` — 3x3 camera matrices (K)
+- `dist_coefs_left.npy` / `dist_coefs_right.npy` — distortion coefficients
+- `rect_trans_left.npy` / `rect_trans_right.npy` — 3x3 rectification transforms (R)
+- `proj_mats_left.npy` / `proj_mats_right.npy` — 3x4 projection matrices (P)
 
-from the session's `calib_result/` directory.
+These 9 files (~2 KB total) are packed into an AGCAL archive, compressed with zlib, and wrapped in an AGST envelope with a 4 KB JSON metadata header.
 
-Remap tables are compacted from 4-byte to 3-byte offsets for storage efficiency and expanded back to the standard 4-byte format on download.
+On download or load, remap tables are computed on the fly from the stored matrices (equivalent to `cv::initUndistortRectifyMap` with nearest-neighbor interpolation). Image dimensions are read from `calibration_meta.json`.

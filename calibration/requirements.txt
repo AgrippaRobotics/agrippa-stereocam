@@ -3,3 +3,4 @@ opencv-python>=4.8
 ipykernel>=6.0
 ipywidgets>=8.0
 matplotlib>=3.7
+nbstripout>=0.6

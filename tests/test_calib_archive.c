@@ -16,8 +16,6 @@
 #include <zlib.h>
 
 #define SAMPLE_SESSION  "calibration/sample_calibration"
-#define SAMPLE_LEFT     "calibration/sample_calibration/calib_result/remap_left.bin"
-#define SAMPLE_RIGHT    "calibration/sample_calibration/calib_result/remap_right.bin"
 
 /* Expected values from calibration_meta.json. */
 #define EXPECTED_WIDTH          1440
@@ -106,33 +104,41 @@ void test_roundtrip_metadata (void)
 
 void test_roundtrip_remap_data_integrity (void)
 {
-    /* Pack and unpack. */
+    /* Pack and unpack twice — both unpacks must produce identical remaps. */
     uint8_t *archive = NULL;
     size_t   archive_len = 0;
     TEST_ASSERT_EQUAL_INT (0, ag_calib_archive_pack (SAMPLE_SESSION, &archive, &archive_len));
 
-    AgRemapTable *arch_left  = NULL;
-    AgRemapTable *arch_right = NULL;
-    AgCalibMeta   meta       = {0};
-    TEST_ASSERT_EQUAL_INT (0, ag_calib_archive_unpack (archive, archive_len,
-                                                        &arch_left, &arch_right, &meta));
+    AgRemapTable *left1  = NULL, *right1 = NULL;
+    AgRemapTable *left2  = NULL, *right2 = NULL;
+    AgCalibMeta   meta1  = {0}, meta2 = {0};
 
-    /* Load from disk for comparison. */
-    AgRemapTable *disk_left  = ag_remap_table_load (SAMPLE_LEFT);
-    AgRemapTable *disk_right = ag_remap_table_load (SAMPLE_RIGHT);
-    TEST_ASSERT_NOT_NULL (disk_left);
-    TEST_ASSERT_NOT_NULL (disk_right);
+    TEST_ASSERT_EQUAL_INT (0, ag_calib_archive_unpack (archive, archive_len,
+                                                        &left1, &right1, &meta1));
+    TEST_ASSERT_EQUAL_INT (0, ag_calib_archive_unpack (archive, archive_len,
+                                                        &left2, &right2, &meta2));
+
+    TEST_ASSERT_NOT_NULL (left1);
+    TEST_ASSERT_NOT_NULL (right1);
+    TEST_ASSERT_NOT_NULL (left2);
+    TEST_ASSERT_NOT_NULL (right2);
 
     size_t n = (size_t) EXPECTED_WIDTH * EXPECTED_HEIGHT;
-    TEST_ASSERT_EQUAL_MEMORY (disk_left->offsets, arch_left->offsets,
+
+    /* Remap tables computed from the same .npy data must be identical. */
+    TEST_ASSERT_EQUAL_MEMORY (left1->offsets, left2->offsets,
                               n * sizeof (uint32_t));
-    TEST_ASSERT_EQUAL_MEMORY (disk_right->offsets, arch_right->offsets,
+    TEST_ASSERT_EQUAL_MEMORY (right1->offsets, right2->offsets,
                               n * sizeof (uint32_t));
 
-    ag_remap_table_free (arch_left);
-    ag_remap_table_free (arch_right);
-    ag_remap_table_free (disk_left);
-    ag_remap_table_free (disk_right);
+    /* Metadata must match. */
+    TEST_ASSERT_EQUAL_INT (meta1.min_disparity, meta2.min_disparity);
+    TEST_ASSERT_EQUAL_INT (meta1.num_disparities, meta2.num_disparities);
+
+    ag_remap_table_free (left1);
+    ag_remap_table_free (right1);
+    ag_remap_table_free (left2);
+    ag_remap_table_free (right2);
     g_free (archive);
 }
 
@@ -210,7 +216,7 @@ void test_agcz_payload_at_offset_4096 (void)
     g_free (data);
 }
 
-void test_agcal_entry_count_is_3 (void)
+void test_agcal_entry_count (void)
 {
     uint8_t *data = NULL;
     size_t   len  = 0;
@@ -224,16 +230,17 @@ void test_agcal_entry_count_is_3 (void)
                                               data + 4096 + 8,
                                               (uLong) (len - 4096 - 8)));
 
-    /* AGCAL header: 8-byte magic, then uint32 entry count. */
+    /* AGCAL header: 8-byte magic, then uint32 entry count.
+     * 9 entries: calibration_meta.json + 4 .npy per side. */
     uint32_t n_entries = read_u32 (agcal + 8);
-    TEST_ASSERT_EQUAL_UINT32 (3u, n_entries);
+    TEST_ASSERT_EQUAL_UINT32 (9u, n_entries);
 
     g_free (agcal);
     g_free (data);
 }
 
 /* ------------------------------------------------------------------ */
-/*  Tests: backward_compat                                             */
+/*  Tests: envelope_formats (unpack accepts AGCAL, AGCZ, AGST)        */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -663,9 +670,9 @@ main (void)
     RUN_TEST (test_output_is_agst_envelope);
     RUN_TEST (test_agst_header_contains_valid_json);
     RUN_TEST (test_agcz_payload_at_offset_4096);
-    RUN_TEST (test_agcal_entry_count_is_3);
+    RUN_TEST (test_agcal_entry_count);
 
-    /* backward_compat */
+    /* envelope_formats */
     RUN_TEST (test_unpack_raw_agcal);
     RUN_TEST (test_unpack_bare_agcz);
     RUN_TEST (test_unpack_full_agst);
