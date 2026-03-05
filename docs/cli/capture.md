@@ -1,6 +1,6 @@
 # `capture`
 
-Capture a single stereo frame pair and write it to disk. With `--burst N`, captures N pairs in rapid succession from a single trigger.
+Capture a single stereo frame pair and write it to disk, with optional AprilTag detection. With `--burst N`, captures N pairs in rapid succession from a single trigger.
 
 ## Examples
 
@@ -12,6 +12,7 @@ ag-cam-tools capture -a 192.168.0.201 -A -e png --calibration-local calibration/
 ag-cam-tools capture -a 192.168.0.201 -A -e png --calibration-slot 0
 ag-cam-tools capture -a 192.168.0.201 --burst 10 -e png -o ./frames
 ag-cam-tools capture -a 192.168.0.201 --burst 5 -A -e png -o ./frames
+ag-cam-tools capture -a 192.168.0.201 -e png -t 0.05
 ```
 
 ## Options
@@ -31,6 +32,7 @@ ag-cam-tools capture -a 192.168.0.201 --burst 5 -A -e png -o ./frames
 | `--burst` | Burst capture N frames in rapid succession (`2`-`100`) |
 | `--calibration-local` | Calibration session directory on disk |
 | `--calibration-slot` | On-camera calibration slot: `0`, `1`, or `2` |
+| `-t`, `--tag-size` | AprilTag physical size in metres; enables detection |
 | `-v`, `--verbose` | Print diagnostic register readback |
 
 ## Burst Mode
@@ -59,6 +61,20 @@ Supplying `--calibration-local` or `--calibration-slot` enables stereo rectifica
 
 - `--calibration-local` loads remap tables from a calibration session directory on the local filesystem.
 - `--calibration-slot` loads remap tables from a numbered slot (0-2) stored on the camera via `calibration-stash upload`.
+
+## AprilTag Detection
+
+Passing `-t` / `--tag-size` enables AprilTag detection on the captured frame(s). The value is the physical tag size in metres (e.g. `0.05` for a 5 cm tag). Detection runs on both left and right eyes before the images are written.
+
+Each detected tag produces a structured line on stdout with the same format used by [`stream`](stream.md):
+
+```
+apriltag frame=0 eye=left id=7 hamming=0 margin=120.3 center=(640.2,540.1) err=1.23e-07 R=[...] t=[...]
+```
+
+Detection is compiled in when the `apriltag` library is available (system install or vendor submodule). When built without AprilTag support the flag is silently absent from `--help`.
+
+AprilTag detection is supported in both single-frame and `--burst` modes.
 
 ## Notes
 

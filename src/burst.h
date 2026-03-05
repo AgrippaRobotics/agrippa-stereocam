@@ -62,6 +62,7 @@ void burst_ensure_buffers (ArvStream *stream, size_t payload,
  *   enc          - output encoding format
  *   remap_left   - rectification table or NULL
  *   remap_right  - rectification table or NULL
+ *   tag_size_m   - AprilTag physical size in metres (0 = no detection)
  *
  * Returns 0 if all burst_count frames were saved successfully,
  * EXIT_FAILURE if any frame was lost or writing failed.
@@ -70,7 +71,8 @@ int burst_capture (ArvCamera *camera, const AgCameraConfig *cfg,
                    int burst_count, const char *output_dir,
                    AgEncFormat enc,
                    const AgRemapTable *remap_left,
-                   const AgRemapTable *remap_right);
+                   const AgRemapTable *remap_right,
+                   double tag_size_m);
 
 /*
  * Generate the output basename for frame index i in a burst of

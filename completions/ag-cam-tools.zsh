@@ -55,6 +55,7 @@ _ag_cam_tools_capture() {
         '(--calibration-slot)--calibration-local=[calibration session folder]:session:_ag_cam_tools_calib_local_sessions' \
         '(--calibration-local)--calibration-slot=[on-camera calibration slot]:slot:(0 1 2)' \
         '--burst=[burst capture N frames]:count:' \
+        '(-t --tag-size)'{-t,--tag-size}'=[AprilTag size in meters]:meters:' \
         '(-v --verbose)'{-v,--verbose}'[print diagnostic readback]' \
         '(-h --help)'{-h,--help}'[print this help]'
 }

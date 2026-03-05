@@ -6,6 +6,7 @@
  */
 
 #include "burst.h"
+#include "apriltag_detect.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,7 +65,8 @@ burst_capture (ArvCamera *camera, const AgCameraConfig *cfg,
                int burst_count, const char *output_dir,
                AgEncFormat enc,
                const AgRemapTable *remap_left,
-               const AgRemapTable *remap_right)
+               const AgRemapTable *remap_right,
+               double tag_size_m)
 {
     ArvDevice *device = arv_camera_get_device (camera);
 
@@ -101,6 +103,23 @@ burst_capture (ArvCamera *camera, const AgCameraConfig *cfg,
                                    device, "PixelFormat", NULL);
     gboolean is_dual_bayer = pixel_format &&
                               strcmp (pixel_format, "DualBayerRG8") == 0;
+
+#ifdef HAVE_APRILTAG
+    apriltag_detector_t *at_detector = NULL;
+    apriltag_family_t   *at_family   = NULL;
+    double at_fx = 0, at_fy = 0, at_cx = 0, at_cy = 0;
+
+    if (tag_size_m > 0.0 && is_dual_bayer) {
+        at_detector = ag_apriltag_detector_create (&at_family);
+
+        guint sub_w = (cfg->frame_w / 2) / (guint) cfg->software_binning;
+        guint sub_h = cfg->frame_h / (guint) cfg->software_binning;
+        ag_apriltag_estimate_intrinsics (sub_w, sub_h,
+                                         &at_fx, &at_fy, &at_cx, &at_cy);
+    }
+#else
+    (void) tag_size_m;
+#endif
 
     int frames_saved  = 0;
     int frames_failed = 0;
@@ -142,6 +161,33 @@ burst_capture (ArvCamera *camera, const AgCameraConfig *cfg,
         int rc;
 
         if (is_dual_bayer) {
+#ifdef HAVE_APRILTAG
+            if (at_detector) {
+                guint sub_w = (width / 2) / (guint) cfg->software_binning;
+                guint sub_h = height / (guint) cfg->software_binning;
+                size_t eye_n = (size_t) sub_w * (size_t) sub_h;
+                guint8 *tag_left  = g_malloc (eye_n);
+                guint8 *tag_right = g_malloc (eye_n);
+                extract_dual_bayer_eyes (data, width, height,
+                                          cfg->software_binning,
+                                          tag_left, tag_right);
+
+                AgTagOverlay overlays[AG_MAX_TAG_OVERLAYS];
+                ag_detect_tags_and_pose (at_detector, tag_left,
+                                         sub_w, sub_h, tag_size_m,
+                                         at_fx, at_fy, at_cx, at_cy,
+                                         (guint64) i, "left",
+                                         overlays, AG_MAX_TAG_OVERLAYS);
+                ag_detect_tags_and_pose (at_detector, tag_right,
+                                         sub_w, sub_h, tag_size_m,
+                                         at_fx, at_fy, at_cx, at_cy,
+                                         (guint64) i, "right",
+                                         overlays, AG_MAX_TAG_OVERLAYS);
+
+                g_free (tag_left);
+                g_free (tag_right);
+            }
+#endif
             rc = write_dual_bayer_pair (output_dir, base, data,
                                          width, height, enc,
                                          cfg->software_binning,
@@ -170,6 +216,10 @@ burst_capture (ArvCamera *camera, const AgCameraConfig *cfg,
             frames_failed++;
         }
     }
+
+#ifdef HAVE_APRILTAG
+    ag_apriltag_detector_destroy (at_detector, at_family);
+#endif
 
     printf ("Burst complete: %d/%d frames saved", frames_saved, burst_count);
     if (frames_failed > 0)

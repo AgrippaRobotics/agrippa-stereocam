@@ -39,7 +39,8 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/cmd_calibration_stash.c \
        $(SRCDIR)/cmd_depth_capture.c \
        $(SRCDIR)/cmd_bounce.c \
-       $(SRCDIR)/burst.c
+       $(SRCDIR)/burst.c \
+       $(SRCDIR)/apriltag_detect.c
 
 VENDOR_SRCS = $(VENDORDIR)/argtable3.c \
               $(VENDORDIR)/cJSON.c

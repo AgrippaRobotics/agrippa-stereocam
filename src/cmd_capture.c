@@ -7,6 +7,7 @@
  */
 
 #include "common.h"
+#include "apriltag_detect.h"
 #include "burst.h"
 #include "calib_load.h"
 #include "image.h"
@@ -24,7 +25,8 @@ capture_one_frame (const char *device_id, const char *output_dir,
                    double exposure_us, double gain_db,
                    gboolean auto_expose, int packet_size, int binning,
                    gboolean verbose,
-                   const AgCalibSource *calib_src)
+                   const AgCalibSource *calib_src,
+                   double tag_size_m)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -234,6 +236,42 @@ capture_one_frame (const char *device_id, const char *output_dir,
         const char *pixel_format = arv_device_get_string_feature_value (
                                        device, "PixelFormat", NULL);
         if (pixel_format && strcmp (pixel_format, "DualBayerRG8") == 0) {
+#ifdef HAVE_APRILTAG
+            if (tag_size_m > 0.0) {
+                guint sub_w = (width / 2) / (guint) cfg.software_binning;
+                guint sub_h = height / (guint) cfg.software_binning;
+                size_t eye_n = (size_t) sub_w * (size_t) sub_h;
+                guint8 *tag_left  = g_malloc (eye_n);
+                guint8 *tag_right = g_malloc (eye_n);
+                extract_dual_bayer_eyes (data, width, height,
+                                          cfg.software_binning,
+                                          tag_left, tag_right);
+
+                apriltag_family_t   *at_family   = NULL;
+                apriltag_detector_t *at_detector  = ag_apriltag_detector_create (&at_family);
+                double fx, fy, cx, cy;
+                ag_apriltag_estimate_intrinsics (sub_w, sub_h,
+                                                 &fx, &fy, &cx, &cy);
+
+                AgTagOverlay overlays[AG_MAX_TAG_OVERLAYS];
+                ag_detect_tags_and_pose (at_detector, tag_left,
+                                         sub_w, sub_h, tag_size_m,
+                                         fx, fy, cx, cy,
+                                         0, "left",
+                                         overlays, AG_MAX_TAG_OVERLAYS);
+                ag_detect_tags_and_pose (at_detector, tag_right,
+                                         sub_w, sub_h, tag_size_m,
+                                         fx, fy, cx, cy,
+                                         0, "right",
+                                         overlays, AG_MAX_TAG_OVERLAYS);
+
+                ag_apriltag_detector_destroy (at_detector, at_family);
+                g_free (tag_left);
+                g_free (tag_right);
+            }
+#else
+            (void) tag_size_m;
+#endif
             rc = write_dual_bayer_pair (output_dir, base, data, width, height,
                                         enc, cfg.software_binning,
                                         cfg.data_is_bayer,
@@ -273,7 +311,7 @@ capture_burst_frames (const char *device_id, const char *output_dir,
                       gboolean auto_expose, int packet_size, int binning,
                       gboolean verbose,
                       const AgCalibSource *calib_src,
-                      int burst_count)
+                      int burst_count, double tag_size_m)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -400,7 +438,7 @@ capture_burst_frames (const char *device_id, const char *output_dir,
     printf ("Burst output -> %s\n", burst_dir);
 
     int rc = burst_capture (camera, &cfg, burst_count, burst_dir, enc,
-                             remap_left, remap_right);
+                             remap_left, remap_right, tag_size_m);
 
     g_free (burst_dir);
     arv_camera_stop_acquisition (camera, NULL);
@@ -448,14 +486,25 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                             "rectify using local calibration session");
     struct arg_int *calib_slot  = arg_int0 (NULL, "calibration-slot", "<0-2>",
                                             "rectify using on-camera calibration slot");
+#ifdef HAVE_APRILTAG
+    struct arg_dbl *tag_size  = arg_dbl0 ("t", "tag-size",  "<meters>",
+                                          "AprilTag size in meters (enables detection)");
+#endif
     struct arg_lit *verbose   = arg_lit0 ("v", "verbose",
                                           "print diagnostic readback");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
+#ifdef HAVE_APRILTAG
+    void *argtable[] = { cmd, serial, address, interface, output, encode,
+                         exposure, gain, auto_exp, binning_a, pkt_size,
+                         burst, calib_local, calib_slot,
+                         tag_size, verbose, help, end };
+#else
     void *argtable[] = { cmd, serial, address, interface, output, encode,
                          exposure, gain, auto_exp, binning_a, pkt_size,
                          burst, calib_local, calib_slot,
                          verbose, help, end };
+#endif
 
     int exitcode = EXIT_SUCCESS;
     if (arg_nullcheck (argtable) != 0) {
@@ -556,6 +605,18 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
         printf ("Rectification enabled (calibration from camera slot %d).\n",
                 calib_src.slot);
 
+    double tag_size_m = 0.0;
+#ifdef HAVE_APRILTAG
+    if (tag_size->count) {
+        tag_size_m = tag_size->dval[0];
+        if (tag_size_m <= 0.0) {
+            arg_dstr_catf (res, "error: --tag-size must be positive\n");
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+    }
+#endif
+
     /* Validate encode format. */
     AgEncFormat enc = AG_ENC_PGM;
     if (encode->count) {
@@ -595,12 +656,13 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                           enc, exposure_us, gain_db,
                                           do_auto_expose, pkt_sz, binning,
                                           verbose->count > 0,
-                                          &calib_src, burst_count);
+                                          &calib_src, burst_count,
+                                          tag_size_m);
     else
         exitcode = capture_one_frame (device_id, opt_output, iface_ip, enc,
                                        exposure_us, gain_db, do_auto_expose,
                                        pkt_sz, binning, verbose->count > 0,
-                                       &calib_src);
+                                       &calib_src, tag_size_m);
     g_free (device_id);
 
 done:
