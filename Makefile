@@ -25,7 +25,9 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/cmd_stream.c \
        $(SRCDIR)/cmd_focus.c \
        $(SRCDIR)/cmd_calibration_capture.c \
+       $(SRCDIR)/npy.c \
        $(SRCDIR)/remap.c \
+       $(SRCDIR)/remap_from_calib.c \
        $(SRCDIR)/stereo_common.c \
        $(SRCDIR)/disparity_filter.c \
        $(SRCDIR)/temporal_filter.c \
@@ -171,7 +173,8 @@ $(UNITY_OBJ): $(UNITY_DIR)/unity.c | $(BINDIR)
 	$(CC) -Wall -O2 -g -I$(UNITY_DIR) -DUNITY_INCLUDE_DOUBLE -c -o $@ $<
 
 # Object files needed by unit tests (no main.o, no cmd_*.o).
-TEST_OBJS = $(BINDIR)/remap.o $(BINDIR)/calib_archive.o $(BINDIR)/cJSON.o
+TEST_OBJS = $(BINDIR)/remap.o $(BINDIR)/npy.o $(BINDIR)/remap_from_calib.o \
+            $(BINDIR)/calib_archive.o $(BINDIR)/cJSON.o
 
 # Mock object for device_file functions (tests that need it).
 MOCK_DEVICE_FILE_OBJ = $(BINDIR)/mock_device_file.o
@@ -233,12 +236,25 @@ $(BINDIR)/gen_test_calibration: $(TESTDIR)/gen_test_calibration.c | $(BINDIR)
 $(BINDIR)/test_burst: $(TESTDIR)/test_burst.c $(UNITY_OBJ) | $(BINDIR)
 	$(CC) $(UNITY_CFLAGS) -o $@ $< $(UNITY_OBJ) $(TEST_LIBS)
 
+$(BINDIR)/test_npy: $(TESTDIR)/test_npy.c $(BINDIR)/npy.o $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/npy.o $(UNITY_OBJ) $(TEST_LIBS)
+
+$(BINDIR)/test_remap_from_calib: $(TESTDIR)/test_remap_from_calib.c $(BINDIR)/npy.o \
+                                  $(BINDIR)/remap.o $(BINDIR)/remap_from_calib.o \
+                                  $(UNITY_OBJ) | $(BINDIR)
+	$(CC) $(UNITY_CFLAGS) -o $@ $< $(BINDIR)/npy.o $(BINDIR)/remap.o \
+	      $(BINDIR)/remap_from_calib.o $(UNITY_OBJ) $(TEST_LIBS)
+
 test: $(BINDIR)/test_calib_archive $(BINDIR)/test_remap $(BINDIR)/test_binning \
       $(BINDIR)/test_calib_load $(BINDIR)/test_focus $(BINDIR)/test_stereo_common \
       $(BINDIR)/test_imgproc_extra $(BINDIR)/test_image \
       $(BINDIR)/test_calib_load_slot $(BINDIR)/test_disparity_filter \
-      $(BINDIR)/test_temporal_filter $(BINDIR)/test_confidence
+      $(BINDIR)/test_temporal_filter $(BINDIR)/test_confidence \
+      $(BINDIR)/test_npy $(BINDIR)/test_remap_from_calib \
+      $(BINDIR)/test_burst
 	@echo "=== Unit Tests ==="
+	$(BINDIR)/test_npy
+	$(BINDIR)/test_remap_from_calib
 	$(BINDIR)/test_calib_archive
 	$(BINDIR)/test_remap
 	$(BINDIR)/test_binning

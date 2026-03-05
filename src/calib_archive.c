@@ -3,6 +3,8 @@
  */
 
 #include "calib_archive.h"
+#include "npy.h"
+#include "remap_from_calib.h"
 #include "../vendor/cJSON.h"
 
 #include <stdio.h>
@@ -126,9 +128,15 @@ try_decompress (const uint8_t *data, size_t len, size_t *out_len,
 
 /* Files packed into the archive (in order). */
 static const char *k_archive_files[] = {
-    "remap_left.bin",
-    "remap_right.bin",
     "calibration_meta.json",
+    "cam_mats_left.npy",
+    "cam_mats_right.npy",
+    "dist_coefs_left.npy",
+    "dist_coefs_right.npy",
+    "rect_trans_left.npy",
+    "rect_trans_right.npy",
+    "proj_mats_left.npy",
+    "proj_mats_right.npy",
 };
 #define N_ARCHIVE_FILES  (sizeof k_archive_files / sizeof k_archive_files[0])
 
@@ -178,122 +186,6 @@ read_u32 (const uint8_t *p)
          | ((uint32_t) p[3] << 24);
 }
 
-/*
- * Compact a remap .bin from 4 bytes/offset to 3 bytes/offset.
- *
- * The offsets are pixel indices into a 1440×1080 (or 720×540) image, so the
- * maximum value is well under 2^24 = 16,777,216.  By dropping the unused
- * high byte we save 25% — enough to squeeze binning=1 data into the
- * camera's ~11 MB available storage.
- *
- * The RMAP header's flags field (offset 12) is set to 1 to mark the
- * compact format.  The sentinel 0xFFFFFFFF maps to 0xFFFFFF.
- *
- * Returns a new g_malloc'd buffer; caller must g_free().
- */
-#define AG_REMAP_COMPACT_FLAG  1
-#define AG_REMAP_COMPACT_SENTINEL  0x00FFFFFFu
-
-static uint8_t *
-pack_remap_compact (const uint8_t *data, size_t len, size_t *out_len)
-{
-    *out_len = 0;
-
-    if (len < 16 || memcmp (data, AG_REMAP_MAGIC, 4) != 0)
-        return NULL;
-
-    uint32_t width  = read_u32 (data + 4);
-    uint32_t height = read_u32 (data + 8);
-    size_t n_pixels = (size_t) width * height;
-
-    if (len < 16 + n_pixels * 4)
-        return NULL;
-
-    size_t compact_len = 16 + n_pixels * 3;
-    uint8_t *out = g_malloc (compact_len);
-
-    /* Copy the 16-byte header, then set flags = COMPACT. */
-    memcpy (out, data, 16);
-    uint32_t flags = AG_REMAP_COMPACT_FLAG;
-    memcpy (out + 12, &flags, 4);
-
-    /* Pack each 4-byte offset → 3 bytes (little-endian low 3 bytes). */
-    const uint8_t *src = data + 16;
-    uint8_t       *dst = out  + 16;
-
-    for (size_t i = 0; i < n_pixels; i++) {
-        uint32_t off = read_u32 (src + i * 4);
-        if (off == AG_REMAP_SENTINEL)
-            off = AG_REMAP_COMPACT_SENTINEL;
-        dst[i * 3]     = (uint8_t) (off);
-        dst[i * 3 + 1] = (uint8_t) (off >> 8);
-        dst[i * 3 + 2] = (uint8_t) (off >> 16);
-    }
-
-    *out_len = compact_len;
-    return out;
-}
-
-/*
- * Expand a compact remap buffer back to the standard 4-byte-per-offset
- * format so it can be passed to ag_remap_table_load_from_memory().
- * Returns a new g_malloc'd buffer; caller must g_free().
- */
-static uint8_t *
-unpack_remap_compact (const uint8_t *data, size_t len, size_t *out_len)
-{
-    *out_len = 0;
-
-    if (len < 16)
-        return NULL;
-
-    uint32_t width  = read_u32 (data + 4);
-    uint32_t height = read_u32 (data + 8);
-    uint32_t flags  = read_u32 (data + 12);
-
-    if (flags != AG_REMAP_COMPACT_FLAG)
-        return NULL;   /* not compact format */
-
-    size_t n_pixels = (size_t) width * height;
-
-    if (len < 16 + n_pixels * 3)
-        return NULL;
-
-    size_t full_len = 16 + n_pixels * 4;
-    uint8_t *out = g_malloc (full_len);
-
-    /* Copy header, clear the compact flag. */
-    memcpy (out, data, 16);
-    flags = 0;
-    memcpy (out + 12, &flags, 4);
-
-    /* Expand 3-byte offsets → 4-byte. */
-    const uint8_t *src = data + 16;
-    uint8_t       *dst = out  + 16;
-
-    for (size_t i = 0; i < n_pixels; i++) {
-        uint32_t off = (uint32_t) src[i * 3]
-                     | ((uint32_t) src[i * 3 + 1] << 8)
-                     | ((uint32_t) src[i * 3 + 2] << 16);
-        if (off == AG_REMAP_COMPACT_SENTINEL)
-            off = AG_REMAP_SENTINEL;
-        uint8_t b[4] = { (uint8_t) off, (uint8_t) (off >> 8),
-                         (uint8_t) (off >> 16), (uint8_t) (off >> 24) };
-        memcpy (dst + i * 4, b, 4);
-    }
-
-    *out_len = full_len;
-    return out;
-}
-
-/* Return true if file name looks like a remap .bin entry. */
-static int
-is_remap_entry (const char *name)
-{
-    return strcmp (name, "remap_left.bin")  == 0
-        || strcmp (name, "remap_right.bin") == 0;
-}
-
 int
 ag_calib_archive_pack (const char *session_path,
                        uint8_t **out_data, size_t *out_len)
@@ -301,7 +193,7 @@ ag_calib_archive_pack (const char *session_path,
     *out_data = NULL;
     *out_len  = 0;
 
-    /* Read all component files. */
+    /* Read all component files (all mandatory). */
     uint8_t *file_data[N_ARCHIVE_FILES] = {NULL};
     size_t   file_len[N_ARCHIVE_FILES]  = {0};
 
@@ -312,13 +204,6 @@ ag_calib_archive_pack (const char *session_path,
         g_free (path);
 
         if (rc != 0) {
-            /* calibration_meta.json is optional. */
-            if (i == 2) {
-                file_data[i] = NULL;
-                file_len[i]  = 0;
-                continue;
-            }
-            /* remap files are mandatory. */
             for (size_t j = 0; j < i; j++)
                 g_free (file_data[j]);
             return -1;
@@ -330,12 +215,14 @@ ag_calib_archive_pack (const char *session_path,
      * so the archive is self-documenting.  Also build a compact summary
      * JSON for the AGST header (readable without downloading the full
      * archive).
+     *
+     * calibration_meta.json is always at index 0.
      */
     char *header_json = NULL;
 
-    if (file_data[2] && file_len[2] > 0) {
-        cJSON *root = cJSON_ParseWithLength ((const char *) file_data[2],
-                                              file_len[2]);
+    {
+        cJSON *root = cJSON_ParseWithLength ((const char *) file_data[0],
+                                              file_len[0]);
         if (root) {
             time_t now = time (NULL);
             struct tm *utc = gmtime (&now);
@@ -370,48 +257,19 @@ ag_calib_archive_pack (const char *session_path,
             cJSON_Delete (root);
 
             if (json_str) {
-                g_free (file_data[2]);
+                g_free (file_data[0]);
                 /* cJSON uses stdlib malloc; copy to g_malloc'd buffer. */
                 size_t slen = strlen (json_str);
-                file_data[2] = g_malloc (slen);
-                memcpy (file_data[2], json_str, slen);
-                file_len[2]  = slen;
+                file_data[0] = g_malloc (slen);
+                memcpy (file_data[0], json_str, slen);
+                file_len[0]  = slen;
                 free (json_str);
             }
         }
     }
 
-    /*
-     * Compact remap tables: 4 bytes/offset → 3 bytes/offset.
-     * This saves ~25% and is required to fit binning=1 data into the
-     * camera's ~11 MB available UserFile storage.
-     */
-    for (size_t i = 0; i < N_ARCHIVE_FILES; i++) {
-        if (!file_data[i] || !is_remap_entry (k_archive_files[i]))
-            continue;
-
-        size_t compact_len = 0;
-        uint8_t *compact = pack_remap_compact (file_data[i], file_len[i],
-                                               &compact_len);
-        if (compact) {
-            printf ("  %-18s  %7.1f KB → %7.1f KB (compact 3-byte offsets)\n",
-                    k_archive_files[i],
-                    (double) file_len[i]  / 1024.0,
-                    (double) compact_len / 1024.0);
-            g_free (file_data[i]);
-            file_data[i] = compact;
-            file_len[i]  = compact_len;
-        }
-    }
-
-    /* Count entries with non-zero data. */
-    uint32_t n_entries = 0;
-    for (size_t i = 0; i < N_ARCHIVE_FILES; i++) {
-        if (file_data[i])
-            n_entries++;
-    }
-
-    /* Build the archive. */
+    /* Build the archive — all entries stored as opaque blobs. */
+    uint32_t n_entries = (uint32_t) N_ARCHIVE_FILES;
     GByteArray *buf = g_byte_array_new ();
 
     /* Magic. */
@@ -423,9 +281,6 @@ ag_calib_archive_pack (const char *session_path,
 
     /* Entries. */
     for (size_t i = 0; i < N_ARCHIVE_FILES; i++) {
-        if (!file_data[i])
-            continue;
-
         uint32_t name_len = (uint32_t) strlen (k_archive_files[i]) + 1;
         uint32_t data_len = (uint32_t) file_len[i];
 
@@ -433,6 +288,8 @@ ag_calib_archive_pack (const char *session_path,
         append_u32 (buf, data_len);
         g_byte_array_append (buf, (const uint8_t *) k_archive_files[i], name_len);
         g_byte_array_append (buf, file_data[i], data_len);
+
+        printf ("  %-28s  %7zu bytes\n", k_archive_files[i], file_len[i]);
     }
 
     /* Clean up component files. */
@@ -447,9 +304,9 @@ ag_calib_archive_pack (const char *session_path,
     uint8_t *compressed = compress_archive (raw_data, raw_len, &compressed_len);
 
     if (compressed) {
-        printf ("  zlib:  %.1f MB → %.1f MB (%.0f%% reduction)\n",
-                (double) raw_len / (1024.0 * 1024.0),
-                (double) compressed_len / (1024.0 * 1024.0),
+        printf ("  zlib:  %.1f KB → %.1f KB (%.0f%% reduction)\n",
+                (double) raw_len / 1024.0,
+                (double) compressed_len / 1024.0,
                 (1.0 - (double) compressed_len / (double) raw_len) * 100.0);
         g_free (raw_data);
         raw_data = compressed;
@@ -457,7 +314,6 @@ ag_calib_archive_pack (const char *session_path,
     } else {
         fprintf (stderr,
                  "calib_archive: warn: compression failed, using raw archive\n");
-        /* raw_data/raw_len already set */
     }
 
     /*
@@ -479,11 +335,10 @@ ag_calib_archive_pack (const char *session_path,
     /* Write the JSON summary into the header (null-terminated, padded). */
     if (header_json) {
         size_t json_len = strlen (header_json);
-        size_t max_json = AG_STASH_HEADER_SIZE - 8;   /* room after magic+size */
+        size_t max_json = AG_STASH_HEADER_SIZE - 8;
         if (json_len > max_json - 1)
-            json_len = max_json - 1;   /* leave room for null terminator */
+            json_len = max_json - 1;
         memcpy (stash + 8, header_json, json_len);
-        /* stash is zero-filled, so null terminator is implicit. */
         free (header_json);
         header_json = NULL;
     }
@@ -561,40 +416,25 @@ archive_foreach (const uint8_t *data, size_t len, entry_visitor_fn visitor,
 /*  Unpack                                                             */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    AgRemapTable *left;
-    AgRemapTable *right;
-    AgCalibMeta  *meta;
-} UnpackCtx;
-
 /*
- * Try to load a remap table from archive entry data.  If the entry uses
- * compact 3-byte offsets (flags == 1), expand to standard 4-byte format
- * first.  Returns NULL on error.
+ * Unpack context: collects .npy blob pointers and metadata from the
+ * archive visitor.  The pointers point into the decompressed archive
+ * buffer (no copies made during iteration).
  */
-static AgRemapTable *
-load_remap_entry (const uint8_t *data, uint32_t data_len)
-{
-    if (data_len >= 16) {
-        uint32_t flags = read_u32 (data + 12);
-        if (flags == AG_REMAP_COMPACT_FLAG) {
-            size_t   expanded_len = 0;
-            uint8_t *expanded = unpack_remap_compact (data, data_len,
-                                                      &expanded_len);
-            if (!expanded) {
-                fprintf (stderr,
-                         "calib_archive: failed to expand compact remap\n");
-                return NULL;
-            }
-            AgRemapTable *t = ag_remap_table_load_from_memory (
-                                  expanded, expanded_len);
-            g_free (expanded);
-            return t;
-        }
-    }
+typedef struct {
+    AgCalibMeta  *meta;
+    int           image_w, image_h;
 
-    return ag_remap_table_load_from_memory (data, data_len);
-}
+    /* .npy blob pointers (into archive buffer, not owned). */
+    const uint8_t *cam_mat_l;     uint32_t cam_mat_l_len;
+    const uint8_t *cam_mat_r;     uint32_t cam_mat_r_len;
+    const uint8_t *dist_l;        uint32_t dist_l_len;
+    const uint8_t *dist_r;        uint32_t dist_r_len;
+    const uint8_t *rect_l;        uint32_t rect_l_len;
+    const uint8_t *rect_r;        uint32_t rect_r_len;
+    const uint8_t *proj_l;        uint32_t proj_l_len;
+    const uint8_t *proj_r;        uint32_t proj_r_len;
+} UnpackCtx;
 
 static int
 unpack_visitor (const char *name, uint32_t name_len,
@@ -604,36 +444,123 @@ unpack_visitor (const char *name, uint32_t name_len,
     (void) name_len;
     UnpackCtx *ctx = user_data;
 
-    if (strcmp (name, "remap_left.bin") == 0) {
-        ctx->left = load_remap_entry (data, data_len);
-        if (!ctx->left)
-            return -1;
-    } else if (strcmp (name, "remap_right.bin") == 0) {
-        ctx->right = load_remap_entry (data, data_len);
-        if (!ctx->right)
-            return -1;
-    } else if (strcmp (name, "calibration_meta.json") == 0 && ctx->meta) {
-        /* Parse JSON metadata. */
+    if (strcmp (name, "calibration_meta.json") == 0) {
         cJSON *root = cJSON_ParseWithLength ((const char *) data, data_len);
-        if (root) {
-            cJSON *dr = cJSON_GetObjectItemCaseSensitive (root, "disparity_range");
-            if (dr) {
-                cJSON *md = cJSON_GetObjectItemCaseSensitive (dr, "min_disparity");
-                cJSON *nd = cJSON_GetObjectItemCaseSensitive (dr, "num_disparities");
-                if (cJSON_IsNumber (md)) ctx->meta->min_disparity   = md->valueint;
-                if (cJSON_IsNumber (nd)) ctx->meta->num_disparities = nd->valueint;
-            }
-            cJSON *fl = cJSON_GetObjectItemCaseSensitive (root, "focal_length_px");
-            if (cJSON_IsNumber (fl)) ctx->meta->focal_length_px = fl->valuedouble;
-            cJSON *bl = cJSON_GetObjectItemCaseSensitive (root, "baseline_cm");
-            if (cJSON_IsNumber (bl)) ctx->meta->baseline_cm = bl->valuedouble;
-            cJSON_Delete (root);
-        } else {
-            fprintf (stderr, "calib_archive: warn: failed to parse calibration_meta.json\n");
+        if (!root) {
+            fprintf (stderr,
+                     "calib_archive: failed to parse calibration_meta.json\n");
+            return -1;
         }
+
+        /* Extract image_size for remap computation. */
+        cJSON *isz = cJSON_GetObjectItemCaseSensitive (root, "image_size");
+        if (cJSON_IsArray (isz) && cJSON_GetArraySize (isz) >= 2) {
+            ctx->image_w = cJSON_GetArrayItem (isz, 0)->valueint;
+            ctx->image_h = cJSON_GetArrayItem (isz, 1)->valueint;
+        }
+
+        if (ctx->meta) {
+            cJSON *dr = cJSON_GetObjectItemCaseSensitive (root,
+                                                          "disparity_range");
+            if (dr) {
+                cJSON *md = cJSON_GetObjectItemCaseSensitive (dr,
+                                                              "min_disparity");
+                cJSON *nd = cJSON_GetObjectItemCaseSensitive (dr,
+                                                              "num_disparities");
+                if (cJSON_IsNumber (md))
+                    ctx->meta->min_disparity = md->valueint;
+                if (cJSON_IsNumber (nd))
+                    ctx->meta->num_disparities = nd->valueint;
+            }
+            cJSON *fl = cJSON_GetObjectItemCaseSensitive (root,
+                                                          "focal_length_px");
+            if (cJSON_IsNumber (fl))
+                ctx->meta->focal_length_px = fl->valuedouble;
+            cJSON *bl = cJSON_GetObjectItemCaseSensitive (root, "baseline_cm");
+            if (cJSON_IsNumber (bl))
+                ctx->meta->baseline_cm = bl->valuedouble;
+        }
+
+        cJSON_Delete (root);
     }
 
+    /* Collect .npy blob pointers (no copy, just reference into archive). */
+#define MATCH_NPY(field, filename) \
+    else if (strcmp (name, filename) == 0) { \
+        ctx->field     = data; \
+        ctx->field##_len = data_len; \
+    }
+
+    MATCH_NPY (cam_mat_l, "cam_mats_left.npy")
+    MATCH_NPY (cam_mat_r, "cam_mats_right.npy")
+    MATCH_NPY (dist_l,    "dist_coefs_left.npy")
+    MATCH_NPY (dist_r,    "dist_coefs_right.npy")
+    MATCH_NPY (rect_l,    "rect_trans_left.npy")
+    MATCH_NPY (rect_r,    "rect_trans_right.npy")
+    MATCH_NPY (proj_l,    "proj_mats_left.npy")
+    MATCH_NPY (proj_r,    "proj_mats_right.npy")
+
+#undef MATCH_NPY
+
     return 0;
+}
+
+/*
+ * Build a remap table for one side from its four .npy calibration matrices.
+ * Returns a newly-allocated AgRemapTable, or NULL on error.
+ */
+static AgRemapTable *
+build_remap_from_npy (const uint8_t *cam_buf, uint32_t cam_len,
+                      const uint8_t *dist_buf, uint32_t dist_len,
+                      const uint8_t *rect_buf, uint32_t rect_len,
+                      const uint8_t *proj_buf, uint32_t proj_len,
+                      int width, int height, const char *side)
+{
+    if (!cam_buf || !dist_buf || !rect_buf || !proj_buf) {
+        fprintf (stderr, "calib_archive: missing .npy for %s side\n", side);
+        return NULL;
+    }
+
+    AgNpyArray K, D, R, P;
+
+    if (ag_npy_load (cam_buf, cam_len, &K) != 0) {
+        fprintf (stderr, "calib_archive: failed to parse cam_mats_%s.npy\n",
+                 side);
+        return NULL;
+    }
+    if (ag_npy_load (dist_buf, dist_len, &D) != 0) {
+        fprintf (stderr, "calib_archive: failed to parse dist_coefs_%s.npy\n",
+                 side);
+        g_free (K.data);
+        return NULL;
+    }
+    if (ag_npy_load (rect_buf, rect_len, &R) != 0) {
+        fprintf (stderr, "calib_archive: failed to parse rect_trans_%s.npy\n",
+                 side);
+        g_free (K.data); g_free (D.data);
+        return NULL;
+    }
+    if (ag_npy_load (proj_buf, proj_len, &P) != 0) {
+        fprintf (stderr, "calib_archive: failed to parse proj_mats_%s.npy\n",
+                 side);
+        g_free (K.data); g_free (D.data); g_free (R.data);
+        return NULL;
+    }
+
+    AgRemapTable *table = ag_remap_from_calib (
+        K.data, D.data, (int) D.n_elements, R.data, P.data, width, height);
+
+    g_free (K.data);
+    g_free (D.data);
+    g_free (R.data);
+    g_free (P.data);
+
+    if (!table)
+        fprintf (stderr,
+                 "calib_archive: remap computation failed for %s side\n",
+                 side);
+
+    return table;
 }
 
 int
@@ -657,31 +584,57 @@ ag_calib_archive_unpack (const uint8_t *data, size_t len,
                                       &inner_len, &was_compressed);
 
     if (was_compressed && !inner)
-        return -1;   /* decompression failed */
+        return -1;
 
     const uint8_t *archive_data = inner ? inner : payload;
     size_t         archive_len  = inner ? inner_len : payload_len;
 
-    UnpackCtx ctx = { .left = NULL, .right = NULL, .meta = out_meta };
+    UnpackCtx ctx;
+    memset (&ctx, 0, sizeof ctx);
+    ctx.meta = out_meta;
 
-    int rc = archive_foreach (archive_data, archive_len, unpack_visitor, &ctx);
+    int rc = archive_foreach (archive_data, archive_len,
+                               unpack_visitor, &ctx);
     if (rc != 0) {
-        ag_remap_table_free (ctx.left);
-        ag_remap_table_free (ctx.right);
         g_free (inner);
         return -1;
     }
 
-    if (!ctx.left || !ctx.right) {
-        fprintf (stderr, "calib_archive: archive missing remap table(s)\n");
-        ag_remap_table_free (ctx.left);
-        ag_remap_table_free (ctx.right);
+    if (ctx.image_w <= 0 || ctx.image_h <= 0) {
+        fprintf (stderr,
+                 "calib_archive: missing or invalid image_size in metadata\n");
         g_free (inner);
         return -1;
     }
 
-    *out_left  = ctx.left;
-    *out_right = ctx.right;
+    /* Build remap tables from .npy calibration matrices. */
+    AgRemapTable *left = build_remap_from_npy (
+        ctx.cam_mat_l, ctx.cam_mat_l_len,
+        ctx.dist_l,    ctx.dist_l_len,
+        ctx.rect_l,    ctx.rect_l_len,
+        ctx.proj_l,    ctx.proj_l_len,
+        ctx.image_w, ctx.image_h, "left");
+
+    if (!left) {
+        g_free (inner);
+        return -1;
+    }
+
+    AgRemapTable *right = build_remap_from_npy (
+        ctx.cam_mat_r, ctx.cam_mat_r_len,
+        ctx.dist_r,    ctx.dist_r_len,
+        ctx.rect_r,    ctx.rect_r_len,
+        ctx.proj_r,    ctx.proj_r_len,
+        ctx.image_w, ctx.image_h, "right");
+
+    if (!right) {
+        ag_remap_table_free (left);
+        g_free (inner);
+        return -1;
+    }
+
+    *out_left  = left;
+    *out_right = right;
     g_free (inner);
     return 0;
 }
@@ -872,17 +825,9 @@ typedef struct {
 } ExtractCtx;
 
 /*
- * Visitor that writes each archive entry to disk.
+ * Visitor that writes each archive entry to disk as a raw blob.
+ * All entries (JSON, .npy) are written verbatim.
  *
- * GOTCHA: remap .bin files are stored in compact 3-byte-per-offset format
- * inside the archive (see pack_remap_compact).  We must re-expand them to
- * the standard 4-byte format on extraction so that:
- *   (a) downstream tools (calibration notebook, ag_remap_table_load) can
- *       read them without special handling, and
- *   (b) downloaded files are byte-identical to the originals that were
- *       uploaded (round-trip integrity).
- *
- * Non-remap entries (e.g. calibration_meta.json) are written verbatim.
  * Note: the JSON will contain a "packed_at" timestamp added during pack,
  * so it won't be byte-identical to the original input JSON.
  */
@@ -896,34 +841,14 @@ extract_visitor (const char *name, uint32_t name_len,
 
     char *path = g_build_filename (ctx->output_dir, "calib_result", name, NULL);
 
-    if (is_remap_entry (name)) {
-        /* Load via the standard remap loader (handles compact expansion). */
-        AgRemapTable *table = load_remap_entry (data, data_len);
-        if (!table) {
-            fprintf (stderr, "calib_archive: failed to load %s from archive\n",
-                     name);
-            g_free (path);
-            return -1;
-        }
-
-        if (ag_remap_table_save (table, path) != 0) {
-            ag_remap_table_free (table);
-            g_free (path);
-            return -1;
-        }
-
-        ag_remap_table_free (table);
-    } else {
-        /* Write raw bytes (JSON, etc.). */
-        GError *err = NULL;
-        if (!g_file_set_contents (path, (const gchar *) data,
-                                   (gssize) data_len, &err)) {
-            fprintf (stderr, "calib_archive: failed to write %s: %s\n",
-                     path, err ? err->message : "unknown error");
-            g_clear_error (&err);
-            g_free (path);
-            return -1;
-        }
+    GError *err = NULL;
+    if (!g_file_set_contents (path, (const gchar *) data,
+                               (gssize) data_len, &err)) {
+        fprintf (stderr, "calib_archive: failed to write %s: %s\n",
+                 path, err ? err->message : "unknown error");
+        g_clear_error (&err);
+        g_free (path);
+        return -1;
     }
 
     printf ("  %s (%u bytes)\n", name, data_len);
