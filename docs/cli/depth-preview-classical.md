@@ -93,6 +93,14 @@ When `--stereo-backend sgbm` is active, live tuning is available:
 | `9` / `0` | `mode` |
 | `p` | Print the current parameter set |
 
+## Sensor modes
+
+`depth-preview-classical` requires a **stereo** Lucid camera. Run against a monocular camera (e.g. Triton TRT016S), it exits immediately with non-zero status and:
+
+```
+error: depth-preview requires a stereo Lucid camera; detected monocular sensor on TRT016S-C (243000112)
+```
+
 ## Notes
 
 - When the camera reports that post-binning data is no longer Bayer, the image is fed to the disparity pipeline as grayscale directly, skipping debayering.

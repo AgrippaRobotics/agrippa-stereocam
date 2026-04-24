@@ -76,6 +76,17 @@ Detection is compiled in when the `apriltag` library is available (system instal
 
 AprilTag detection is supported in both single-frame and `--burst` modes.
 
+## Sensor modes
+
+`capture` supports both stereo Lucid heads (PDH016S, DualBayerRG8) and monocular Lucid GigE cameras (Triton TRT016S, BayerRG8 / Mono8). Sensor mode is auto-detected at camera open.
+
+| Mode | Output filenames | `--burst` | `--calibration-*` | `--tag-size` |
+|------|------------------|-----------|-------------------|--------------|
+| stereo | `capture_<ts>_left.{pgm,png,jpg}` + `_right.*` | Supported | Supported | Detected per eye, overlays drawn into output |
+| mono | `capture_<ts>.{pgm,png,jpg}` (single image) | Rejected with error | Rejected with error | Detected on the single image, results logged only (no overlay rendered) |
+
+Mono burst capture and mono single-camera intrinsics rectification are tracked as follow-ups; today the tool fails fast with a clear error if those flags are used against a mono camera.
+
 ## Notes
 
 - `-A` is mutually exclusive with explicit `-x` and `-g`.

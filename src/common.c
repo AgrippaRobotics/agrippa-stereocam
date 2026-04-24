@@ -338,6 +338,75 @@ try_execute_optional_command (ArvDevice *device, const char *name)
 }
 
 /* ================================================================== */
+/*  Sensor-mode detection                                             */
+/* ================================================================== */
+
+int
+detect_sensor_mode (ArvCamera *camera, AgSensorMode *out_mode,
+                    char *out_pixel_format, size_t buf_len)
+{
+    if (!camera || !out_mode)
+        return -1;
+
+    GError *error = NULL;
+    guint n = 0;
+    const char **formats =
+        arv_camera_dup_available_pixel_formats_as_strings (camera, &n, &error);
+    if (error || !formats) {
+        if (error) {
+            fprintf (stderr, "warn: failed to query pixel formats: %s\n",
+                     error->message);
+            g_clear_error (&error);
+        }
+        g_free (formats);
+        return -1;
+    }
+
+    /* Stereo if DualBayerRG8 is in the available list.  Mono otherwise:
+     * pick BayerRG8, then any other BayerRG variant, then Mono8.  This
+     * priority matches the imgproc debayer path (BayerRG) and avoids
+     * silently picking a 16-bit format that downstream cannot handle. */
+    const char *stereo_fmt = NULL;
+    const char *mono_fmt   = NULL;
+    const char *fallback   = NULL;
+
+    for (guint i = 0; i < n; i++) {
+        const char *fmt = formats[i];
+        if (!fmt)
+            continue;
+        if (g_strcmp0 (fmt, "DualBayerRG8") == 0) {
+            stereo_fmt = fmt;
+            break;
+        }
+        if (!mono_fmt && g_strcmp0 (fmt, "BayerRG8") == 0)
+            mono_fmt = fmt;
+        else if (!fallback && g_strcmp0 (fmt, "Mono8") == 0)
+            fallback = fmt;
+    }
+
+    const char *chosen = stereo_fmt ? stereo_fmt :
+                         (mono_fmt  ? mono_fmt  : fallback);
+    if (!chosen) {
+        fprintf (stderr, "error: camera advertises no supported 8-bit "
+                 "pixel format (need DualBayerRG8, BayerRG8, or Mono8); "
+                 "advertised: ");
+        for (guint i = 0; i < n; i++)
+            fprintf (stderr, "%s%s", formats[i] ? formats[i] : "?",
+                     (i + 1 < n) ? ", " : "");
+        fprintf (stderr, "\n");
+        g_free (formats);
+        return -1;
+    }
+
+    *out_mode = stereo_fmt ? AG_SENSOR_STEREO : AG_SENSOR_MONO;
+    if (out_pixel_format && buf_len > 0)
+        g_strlcpy (out_pixel_format, chosen, buf_len);
+
+    g_free (formats);
+    return 0;
+}
+
+/* ================================================================== */
 /*  Unified camera configuration                                      */
 /* ================================================================== */
 
@@ -372,6 +441,16 @@ camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
     try_set_string_feature  (device, "TriggerSource", "Software");
     try_set_string_feature  (device, "ImagerOutputSelector", "All");
 
+    /* Probe sensor topology now (read-only).  PixelFormat is written
+     * later, after binning and geometry, to preserve the historical
+     * setup ordering known to work on Lucid firmware. */
+    if (detect_sensor_mode (camera, &out->sensor_mode,
+                            out->pixel_format, sizeof out->pixel_format) != 0)
+        return EXIT_FAILURE;
+    printf ("  sensor_mode = %s (PixelFormat=%s)\n",
+            out->sensor_mode == AG_SENSOR_STEREO ? "stereo" : "mono",
+            out->pixel_format);
+
     /* Binning. */
     try_set_string_feature  (device, "BinningSelector",       "Sensor");
     try_set_integer_feature (device, "BinningHorizontal",     (gint64) binning);
@@ -394,11 +473,22 @@ camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
                  eff_bin_h, eff_bin_v, out->software_binning);
     }
 
-    /* Geometry. */
+    /* Geometry.  Stereo cameras use the historical PDH016S constants
+     * (preserves exact behavior on the production camera).  Mono cameras
+     * query WidthMax/HeightMax since their physical sensor size is
+     * different from the stereo head and unknown at compile time. */
     try_set_integer_feature (device, "OffsetX", 0);
     try_set_integer_feature (device, "OffsetY", 0);
-    gint64 target_w = (eff_bin_h > 0) ? (AG_SENSOR_WIDTH  / eff_bin_h) : AG_SENSOR_WIDTH;
-    gint64 target_h = (eff_bin_v > 0) ? (AG_SENSOR_HEIGHT / eff_bin_v) : AG_SENSOR_HEIGHT;
+
+    gint64 target_w, target_h;
+    if (out->sensor_mode == AG_SENSOR_STEREO) {
+        target_w = (eff_bin_h > 0) ? (AG_SENSOR_WIDTH  / eff_bin_h) : AG_SENSOR_WIDTH;
+        target_h = (eff_bin_v > 0) ? (AG_SENSOR_HEIGHT / eff_bin_v) : AG_SENSOR_HEIGHT;
+    } else {
+        target_w = read_integer_feature_or_default (device, "WidthMax",  AG_SENSOR_WIDTH);
+        target_h = read_integer_feature_or_default (device, "HeightMax", AG_SENSOR_HEIGHT);
+    }
+
     try_set_integer_feature (device, "Width",  target_w);
     try_set_integer_feature (device, "Height", target_h);
 
@@ -413,7 +503,7 @@ camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
     out->frame_w = (guint) width_rb;
     out->frame_h = (guint) height_rb;
 
-    try_set_string_feature (device, "PixelFormat", "DualBayerRG8");
+    try_set_string_feature (device, "PixelFormat", out->pixel_format);
 
     /* Determine whether post-processing should treat data as Bayer.
      *

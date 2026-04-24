@@ -55,6 +55,14 @@ Calibration is mandatory. Supply either `--calibration-local` or `--calibration-
 - Stereo rectification remap tables (for disparity computation).
 - `focal_length_px` and `baseline_cm` in the calibration metadata (for disparity-to-depth conversion).
 
+## Sensor modes
+
+`depth-capture` requires a **stereo** Lucid camera. Run against a monocular camera (e.g. Triton TRT016S), it exits immediately with non-zero status and:
+
+```
+error: depth-capture requires a stereo Lucid camera; detected monocular sensor on TRT016S-C (243000112)
+```
+
 ## Notes
 
 - The disparity backend is SGBM (classical). SGBM parameters are seeded from calibration metadata (`min_disparity`, `num_disparities`).

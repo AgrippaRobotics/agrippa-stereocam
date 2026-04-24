@@ -1,6 +1,10 @@
 CC      = gcc
 CXX     ?= g++
-CFLAGS  = -Wall -Wextra -O2 \
+# -MMD -MP emits per-object .d dependency files so headers (e.g. struct
+# layout in common.h) trigger rebuilds of every .c that includes them.
+# Without this, callers compiled against a stale struct size produced
+# silent stack overflows when AgCameraConfig grew.
+CFLAGS  = -Wall -Wextra -O2 -MMD -MP \
           $(shell pkg-config --cflags aravis-0.8) \
           $(shell pkg-config --cflags sdl2)
 LIBS    = $(shell pkg-config --libs aravis-0.8) \
@@ -106,6 +110,16 @@ ifneq ($(ONNXRT_LIBS),)
   SRCS   += $(SRCDIR)/stereo_onnx.c
 endif
 
+# --- FFmpeg: optional, provides video recording ---
+FFMPEG_CFLAGS := $(shell pkg-config --cflags libavcodec libavformat libavutil libswscale 2>/dev/null)
+FFMPEG_LIBS   := $(shell pkg-config --libs   libavcodec libavformat libavutil libswscale 2>/dev/null)
+
+ifneq ($(FFMPEG_LIBS),)
+  CFLAGS += $(FFMPEG_CFLAGS) -DHAVE_FFMPEG=1
+  LIBS   += $(FFMPEG_LIBS)
+  SRCS   += $(SRCDIR)/video_writer.c
+endif
+
 PREFIX     ?= /usr/local
 BASHCOMPDIR ?= $(PREFIX)/share/bash-completion/completions
 ZSHCOMPDIR  ?= $(PREFIX)/share/zsh/site-functions
@@ -142,6 +156,10 @@ $(APRILTAG_LIB): $(APRILTAG_OBJS)
 $(TARGET): $(OBJS) $(VENDOR_OBJS) $(CXX_OBJS) $(APRILTAG_LIB)
 	$(CC) -o $@ $(OBJS) $(VENDOR_OBJS) $(CXX_OBJS) $(if $(APRILTAG_LIB),-L$(BINDIR) -lapriltag) $(LIBS)
 	codesign --force --sign - $@ 2>/dev/null || true
+
+# Pull in header-dependency files emitted by -MMD/-MP.  Missing files
+# (first build) are ignored thanks to the leading dash.
+-include $(OBJS:.o=.d) $(VENDOR_OBJS:.o=.d) $(CXX_OBJS:.o=.d)
 
 install: $(TARGET)
 	install -d $(DESTDIR)$(PREFIX)/bin
@@ -281,6 +299,7 @@ test-hw: $(TARGET) $(BINDIR)/gen_test_calibration
 	$(TESTDIR)/test_capture_rectify_hw.sh
 	$(TESTDIR)/test_burst_hw.sh
 	$(TESTDIR)/test_bounce_hw.sh
+	$(TESTDIR)/test_record_hw.sh
 
 test-all: test test-hw
 

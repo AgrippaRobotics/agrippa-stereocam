@@ -18,7 +18,9 @@ typedef struct {
     double baseline_cm;
 } AgCalibMeta;
 
-/* Sensor geometry for the PDH016S (DualBayerRG8). */
+/* Default (fallback) sensor geometry for the PDH016S (DualBayerRG8 dual-eye).
+ * Used only if the camera's WidthMax/HeightMax cannot be queried.  Real
+ * geometry is taken from the device on every open. */
 #define AG_SENSOR_WIDTH   2880
 #define AG_SENSOR_HEIGHT  1080
 
@@ -28,14 +30,24 @@ typedef enum {
     AG_MODE_CONTINUOUS
 } AgAcquisitionMode;
 
+/* Sensor topology detected on camera open.  STEREO means a dual-eye
+ * Lucid head delivering DualBayerRG8 (left+right interleaved per row);
+ * MONO means a single-sensor camera delivering BayerRG8 or Mono8. */
+typedef enum {
+    AG_SENSOR_STEREO,
+    AG_SENSOR_MONO
+} AgSensorMode;
+
 /* Returned by camera_configure(). */
 typedef struct {
-    ArvStream *stream;
-    guint      frame_w;          /* width after binning  */
-    guint      frame_h;          /* height after binning */
-    int        software_binning; /* >1 if HW binning unavailable */
-    size_t     payload;
-    gboolean   data_is_bayer;    /* FALSE when eff. binning > 1 */
+    ArvStream   *stream;
+    guint        frame_w;          /* width after binning  */
+    guint        frame_h;          /* height after binning */
+    int          software_binning; /* >1 if HW binning unavailable */
+    size_t       payload;
+    gboolean     data_is_bayer;    /* FALSE when eff. binning > 1 */
+    AgSensorMode sensor_mode;      /* stereo dual-eye vs single sensor */
+    char         pixel_format[32]; /* actual PixelFormat selected      */
 } AgCameraConfig;
 
 /* --- Network helpers --- */
@@ -76,6 +88,17 @@ gboolean try_get_integer_feature (ArvDevice *dev, const char *name,
 gboolean try_get_float_feature   (ArvDevice *dev, const char *name,
                                   double *out_value);
 void     try_execute_optional_command (ArvDevice *dev, const char *name);
+
+/*
+ * Probe an opened camera's available pixel formats and decide whether it
+ * is a stereo Lucid head (advertises DualBayerRG8) or a monocular Lucid
+ * camera (BayerRG8 / Mono8 only).  On success, *out_mode is set and
+ * *out_pixel_format is filled with the recommended PixelFormat string
+ * (caller-provided buffer, recommend >= 32 bytes).  Returns 0 on
+ * success, -1 if no usable pixel format is available.
+ */
+int detect_sensor_mode (ArvCamera *camera, AgSensorMode *out_mode,
+                        char *out_pixel_format, size_t buf_len);
 
 /* --- Unified camera configuration --- */
 

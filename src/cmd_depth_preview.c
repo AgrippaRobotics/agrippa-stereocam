@@ -180,6 +180,23 @@ depth_preview_loop (const char *device_id, const char *iface_ip,
         return EXIT_FAILURE;
     }
 
+    /* Stereo depth requires two eyes; refuse mono cameras explicitly
+     * rather than producing nonsense or crashing downstream. */
+    if (cfg.sensor_mode == AG_SENSOR_MONO) {
+        const char *model  = arv_camera_get_model_name (camera, NULL);
+        const char *serial = arv_device_get_string_feature_value (
+            arv_camera_get_device (camera), "DeviceSerialNumber", NULL);
+        fprintf (stderr,
+                 "error: depth-preview requires a stereo Lucid camera; "
+                 "detected monocular sensor on %s (%s)\n",
+                 model  ? model  : "(unknown model)",
+                 serial ? serial : "(unknown serial)");
+        g_object_unref (cfg.stream);
+        g_object_unref (camera);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
     ArvDevice *device = arv_camera_get_device (camera);
 
     /* Compute processing dimensions. */

@@ -77,6 +77,19 @@ focus_loop (const char *device_id, const char *iface_ip,
         return EXIT_FAILURE;
     }
 
+    /* The focus subcommand's value comes from comparing left/right scores
+     * to indicate which eye to adjust.  Mono single-eye focus would need
+     * a different UX and is not implemented here. */
+    if (cfg.sensor_mode == AG_SENSOR_MONO) {
+        fprintf (stderr,
+                 "error: focus is stereo-only (compares left vs right "
+                 "focus scores); not yet implemented for mono cameras\n");
+        g_object_unref (cfg.stream);
+        g_object_unref (camera);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
     ArvDevice *device = arv_camera_get_device (camera);
 
     /* Compute display dimensions. */
