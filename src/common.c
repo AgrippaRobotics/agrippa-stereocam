@@ -441,15 +441,15 @@ camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
     try_set_string_feature  (device, "TriggerSource", "Software");
     try_set_string_feature  (device, "ImagerOutputSelector", "All");
 
-    /* Detect stereo vs mono and pick the matching pixel format BEFORE
-     * geometry, since WidthMax/HeightMax depend on the active format. */
+    /* Probe sensor topology now (read-only).  PixelFormat is written
+     * later, after binning and geometry, to preserve the historical
+     * setup ordering known to work on Lucid firmware. */
     if (detect_sensor_mode (camera, &out->sensor_mode,
                             out->pixel_format, sizeof out->pixel_format) != 0)
         return EXIT_FAILURE;
     printf ("  sensor_mode = %s (PixelFormat=%s)\n",
             out->sensor_mode == AG_SENSOR_STEREO ? "stereo" : "mono",
             out->pixel_format);
-    try_set_string_feature (device, "PixelFormat", out->pixel_format);
 
     /* Binning. */
     try_set_string_feature  (device, "BinningSelector",       "Sensor");
@@ -473,30 +473,37 @@ camera_configure (ArvCamera *camera, AgAcquisitionMode mode,
                  eff_bin_h, eff_bin_v, out->software_binning);
     }
 
-    /* Geometry.  Query WidthMax/HeightMax post-binning rather than using
-     * the PDH016S constants, so mono cameras (single-sensor) and any
-     * future variants pick up the correct full-frame dimensions. */
+    /* Geometry.  Stereo cameras use the historical PDH016S constants
+     * (preserves exact behavior on the production camera).  Mono cameras
+     * query WidthMax/HeightMax since their physical sensor size is
+     * different from the stereo head and unknown at compile time. */
     try_set_integer_feature (device, "OffsetX", 0);
     try_set_integer_feature (device, "OffsetY", 0);
 
-    gint64 width_max  = read_integer_feature_or_default (device, "WidthMax",
-        (eff_bin_h > 0 ? AG_SENSOR_WIDTH  / eff_bin_h : AG_SENSOR_WIDTH));
-    gint64 height_max = read_integer_feature_or_default (device, "HeightMax",
-        (eff_bin_v > 0 ? AG_SENSOR_HEIGHT / eff_bin_v : AG_SENSOR_HEIGHT));
+    gint64 target_w, target_h;
+    if (out->sensor_mode == AG_SENSOR_STEREO) {
+        target_w = (eff_bin_h > 0) ? (AG_SENSOR_WIDTH  / eff_bin_h) : AG_SENSOR_WIDTH;
+        target_h = (eff_bin_v > 0) ? (AG_SENSOR_HEIGHT / eff_bin_v) : AG_SENSOR_HEIGHT;
+    } else {
+        target_w = read_integer_feature_or_default (device, "WidthMax",  AG_SENSOR_WIDTH);
+        target_h = read_integer_feature_or_default (device, "HeightMax", AG_SENSOR_HEIGHT);
+    }
 
-    try_set_integer_feature (device, "Width",  width_max);
-    try_set_integer_feature (device, "Height", height_max);
+    try_set_integer_feature (device, "Width",  target_w);
+    try_set_integer_feature (device, "Height", target_h);
 
-    gint64 width_rb  = read_integer_feature_or_default (device, "Width",  width_max);
-    gint64 height_rb = read_integer_feature_or_default (device, "Height", height_max);
-    if (width_rb != width_max || height_rb != height_max) {
+    gint64 width_rb  = read_integer_feature_or_default (device, "Width",  target_w);
+    gint64 height_rb = read_integer_feature_or_default (device, "Height", target_h);
+    if (width_rb != target_w || height_rb != target_h) {
         fprintf (stderr,
                  "warn: geometry readback is %" G_GINT64_FORMAT "x%" G_GINT64_FORMAT
                  " (requested %" G_GINT64_FORMAT "x%" G_GINT64_FORMAT ")\n",
-                 width_rb, height_rb, width_max, height_max);
+                 width_rb, height_rb, target_w, target_h);
     }
     out->frame_w = (guint) width_rb;
     out->frame_h = (guint) height_rb;
+
+    try_set_string_feature (device, "PixelFormat", out->pixel_format);
 
     /* Determine whether post-processing should treat data as Bayer.
      *
