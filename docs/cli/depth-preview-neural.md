@@ -18,6 +18,10 @@ ag-cam-tools depth-preview-neural -a 192.168.0.201 -A --calibration-slot 0 --ste
 
 The CLI also accepts `igev` and `foundation` as aliases for `onnx`.
 
+## Sensor modes
+
+`depth-preview-neural` requires a **stereo** Lucid camera. The mono refusal behavior matches `depth-preview-classical` — see that page for the exact error message.
+
 ## Notes
 
 - `depth-preview-neural` uses the same major CLI options as `depth-preview-classical`.

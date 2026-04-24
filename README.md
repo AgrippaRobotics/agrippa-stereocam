@@ -1,6 +1,8 @@
 # agrippa-stereocam
 
-Stereo camera toolkit for the [Lucid Phoenix PHD016S](https://thinklucid.com/product/phoenix-1-6mp-dual-head-model-imx273/) dual-head GigE Vision camera. It covers camera discovery, capture, live preview, focus alignment, calibration workflows, and classical or neural depth preview.
+Camera toolkit for Lucid GigE Vision cameras. The primary target is the [Lucid Phoenix PHD016S](https://thinklucid.com/product/phoenix-1-6mp-dual-head-model-imx273/) dual-head stereo camera, with monocular Lucid cameras (e.g. Triton TRT016S) supported for the non-stereo subcommands (`list`, `connect`, `stream`, single-shot `capture`). It covers camera discovery, capture, live preview, focus alignment, calibration workflows, and classical or neural depth preview.
+
+Sensor topology (stereo vs mono) is auto-detected at camera open by probing the device's available pixel formats — `DualBayerRG8` advertises stereo, anything else falls back to mono. Subcommands that intrinsically need two eyes (`depth-preview-*`, `depth-capture`, `focus`, `calibration-capture`, `--burst`) reject mono cameras with a clear error.
 
 Documentation now lives in the dedicated docs site:
 
@@ -91,7 +93,7 @@ source completions/ag-cam-tools.zsh
 
 ## Hardware snapshot
 
-Platform: [Lucid Phoenix PHD 1.6 MP Dual Extended-Head (IMX273)](https://thinklucid.com/product/phoenix-1-6mp-dual-head-model-imx273/)
+Primary platform: [Lucid Phoenix PHD 1.6 MP Dual Extended-Head (IMX273)](https://thinklucid.com/product/phoenix-1-6mp-dual-head-model-imx273/)
 
 | Parameter | Value |
 |-----------|-------|
@@ -101,6 +103,8 @@ Platform: [Lucid Phoenix PHD 1.6 MP Dual Extended-Head (IMX273)](https://thinklu
 | Pixel size | 3.45 um |
 | Interface | 1000BASE-T (GigE Vision) |
 | Power | PoE or 12-24 VDC |
+
+Also supported (non-stereo subcommands only): monocular Lucid GigE cameras such as the Triton TRT016S (1440 x 1080 single-sensor, BayerRG8). Detection is automatic via the camera's advertised pixel formats; if the model whitelist needs to take over for unusual firmware, see the implementation in `src/common.c:detect_sensor_mode`.
 
 Additional hardware notes live in [docs/hardware/circuits.md](docs/hardware/circuits.md).
 

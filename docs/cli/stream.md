@@ -39,6 +39,17 @@ Supplying `--calibration-local` or `--calibration-slot` enables stereo rectifica
 
 On ARM64 platforms, the remap path uses NEON acceleration.
 
+## Sensor modes
+
+`stream` supports both stereo Lucid heads (e.g. PDH016S, DualBayerRG8) and monocular Lucid GigE cameras (e.g. Triton TRT016S, BayerRG8 / Mono8). The mode is auto-detected at camera open by probing the device's available pixel formats — `DualBayerRG8` advertises stereo, anything else falls back to mono.
+
+| Mode | Window title | Recording | Rectification |
+|------|--------------|-----------|---------------|
+| stereo | `Stereo Stream` | Side-by-side / top-bottom / separate per `--record-layout` | Supported via `--calibration-*` |
+| mono | `Mono Stream` | Single-frame MP4 (mono layout, ignores `--record-layout`) | Not supported — calibration flags rejected |
+
+When `--record-layout` is set on a mono camera, a warning is printed and the recording falls back to mono layout. AprilTag detection runs on the single image instead of left/right eyes.
+
 ## Notes
 
 - Press `q` or `Esc` to quit.

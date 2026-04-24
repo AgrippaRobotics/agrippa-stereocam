@@ -50,3 +50,13 @@ Within it, images are saved into:
 - Press `s` to save the current pair.
 - Press `q` or `Esc` to quit.
 - The window title shows the running image count.
+
+## Sensor modes
+
+`calibration-capture` is **stereo-only**. It produces the image pairs feeding a downstream stereo intrinsics + extrinsics calibration. Run against a monocular Lucid camera, it exits with:
+
+```
+error: calibration-capture is stereo-only; mono Lucid cameras need a single-camera intrinsics workflow that is not yet implemented
+```
+
+Single-camera intrinsic calibration for mono Lucid cameras is a candidate follow-up.

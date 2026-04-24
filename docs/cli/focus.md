@@ -72,3 +72,13 @@ By default the command also emits procedural stereo audio:
 - once focus is considered aligned, alternating confirmation beeps are played.
 
 The detailed audio design is documented in [../workflows/focus-audio.md](../workflows/focus-audio.md).
+
+## Sensor modes
+
+`focus` is **stereo-only**. Its core function is comparing left vs right focus scores to indicate which eye to adjust; this has no analogue on a single sensor. Run against a monocular Lucid camera (e.g. Triton TRT016S), it exits immediately with:
+
+```
+error: focus is stereo-only (compares left vs right focus scores); not yet implemented for mono cameras
+```
+
+A single-camera focus mode is a candidate follow-up.
