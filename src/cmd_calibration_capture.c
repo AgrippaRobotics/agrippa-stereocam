@@ -115,6 +115,20 @@ calibration_capture_loop (const char *device_id, const char *iface_ip,
         return EXIT_FAILURE;
     }
 
+    /* calibration-capture produces a stereo intrinsics + extrinsics
+     * pair; mono single-camera intrinsic calibration is a different
+     * workflow not implemented here. */
+    if (cfg.sensor_mode == AG_SENSOR_MONO) {
+        fprintf (stderr,
+                 "error: calibration-capture is stereo-only; mono Lucid "
+                 "cameras need a single-camera intrinsics workflow that "
+                 "is not yet implemented\n");
+        g_object_unref (cfg.stream);
+        g_object_unref (camera);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
     ArvDevice *device = arv_camera_get_device (camera);
 
     /* Query the camera serial number for the session folder name. */

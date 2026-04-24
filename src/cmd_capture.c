@@ -1,9 +1,11 @@
 /*
  * cmd_capture.c — "ag-cam-tools capture" subcommand
  *
- * SingleFrame acquisition with software trigger.  Writes DualBayerRG8
- * stereo pairs to disk.  With --burst N, captures N frames in rapid
- * succession via FrameBurstStart triggering.
+ * SingleFrame acquisition with software trigger.  Writes a stereo
+ * DualBayerRG8 pair (PDH016S) or a single Bayer/Mono frame (mono
+ * Lucid cameras like the Triton TRT016S).  With --burst N, captures N
+ * frames in rapid succession via FrameBurstStart triggering — burst is
+ * currently stereo-only.
  */
 
 #include "common.h"
@@ -51,11 +53,22 @@ capture_one_frame (const char *device_id, const char *output_dir,
 
     ArvDevice *device = arv_camera_get_device (camera);
 
-    /* Load rectification remap tables if calibration was requested. */
+    /* Load rectification remap tables if calibration was requested.
+     * Rectification requires a stereo calibration pipeline; mono
+     * cameras have nothing meaningful to rectify here. */
     AgRemapTable *remap_left  = NULL;
     AgRemapTable *remap_right = NULL;
 
     if (calib_src->local_path || calib_src->slot >= 0) {
+        if (cfg.sensor_mode == AG_SENSOR_MONO) {
+            fprintf (stderr,
+                     "error: --calibration-local / --calibration-slot are "
+                     "stereo-only; not applicable to mono cameras\n");
+            g_object_unref (cfg.stream);
+            g_object_unref (camera);
+            arv_shutdown ();
+            return EXIT_FAILURE;
+        }
         if (ag_calib_load (device, calib_src,
                             &remap_left, &remap_right, NULL) != 0) {
             g_object_unref (cfg.stream);
@@ -283,6 +296,25 @@ capture_one_frame (const char *device_id, const char *output_dir,
                                         ov_left, n_ltags,
                                         ov_right, n_rtags);
         } else {
+#ifdef HAVE_APRILTAG
+            /* Mono path: optional tag detection.  Tags are logged via
+             * ag_detect_tags_and_pose; overlay rendering into the saved
+             * image is not yet implemented for mono. */
+            if (tag_size_m > 0.0) {
+                guint sub_w = width  / (guint) cfg.software_binning;
+                guint sub_h = height / (guint) cfg.software_binning;
+                AgApriltagContext *at_ctx = ag_apriltag_create ();
+                double fx, fy, cx, cy;
+                ag_apriltag_estimate_intrinsics (sub_w, sub_h,
+                                                 &fx, &fy, &cx, &cy);
+                AgTagOverlay tags[AG_MAX_TAG_OVERLAYS];
+                ag_detect_tags_and_pose (at_ctx->detector, data,
+                                         sub_w, sub_h, tag_size_m,
+                                         fx, fy, cx, cy, 0, "mono",
+                                         tags, AG_MAX_TAG_OVERLAYS, FALSE);
+                ag_apriltag_destroy (at_ctx);
+            }
+#endif
             const char *ext = (enc == AG_ENC_PNG) ? "png"
                             : (enc == AG_ENC_JPG) ? "jpg" : "pgm";
             char *name = g_strdup_printf ("%s.%s", base, ext);
@@ -291,6 +323,8 @@ capture_one_frame (const char *device_id, const char *output_dir,
                 rc = write_pgm (path, data, width, height);
             else
                 rc = write_color_image (enc, path, data, width, height);
+            printf ("Saved: %s  (%ux%u, %s)\n", path, width, height,
+                    pixel_format ? pixel_format : "?");
             g_free (name);
             g_free (path);
         }
@@ -336,6 +370,18 @@ capture_burst_frames (const char *device_id, const char *output_dir,
     if (camera_configure (camera, AG_MODE_CONTINUOUS,
                           binning, exposure_us, gain_db, auto_expose,
                           packet_size, iface_ip, verbose, &cfg) != EXIT_SUCCESS) {
+        g_object_unref (camera);
+        arv_shutdown ();
+        return EXIT_FAILURE;
+    }
+
+    /* Burst capture currently writes via write_dual_bayer_pair, which
+     * is stereo-only.  Mono burst would need a separate pipeline. */
+    if (cfg.sensor_mode == AG_SENSOR_MONO) {
+        fprintf (stderr,
+                 "error: --burst is currently stereo-only; not yet "
+                 "implemented for mono cameras\n");
+        g_object_unref (cfg.stream);
         g_object_unref (camera);
         arv_shutdown ();
         return EXIT_FAILURE;
