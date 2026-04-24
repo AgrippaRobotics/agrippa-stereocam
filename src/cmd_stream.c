@@ -1,9 +1,11 @@
 /*
  * cmd_stream.c — "ag-cam-tools stream" subcommand
  *
- * Continuously captures DualBayerRG8 frames, debayers each eye,
- * and displays them side-by-side in an SDL2 window.
- * Optionally detects AprilTags and estimates their pose.
+ * Continuously captures frames from a Lucid GigE camera and displays
+ * them in an SDL2 window.  For stereo Lucid heads (DualBayerRG8) the
+ * two eyes are split and rendered side-by-side; for monocular cameras
+ * (BayerRG8 / Mono8) a single frame fills the window.  Optionally
+ * detects AprilTags and estimates their pose.
  */
 
 #include "common.h"
@@ -11,12 +13,16 @@
 #include "calib_load.h"
 #include "font.h"
 #include "remap.h"
+#ifdef HAVE_FFMPEG
+#include "video_writer.h"
+#endif
 #include "../vendor/argtable3.h"
 
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <SDL2/SDL.h>
 
@@ -33,7 +39,9 @@ static int
 stream_loop (const char *device_id, const char *iface_ip,
              double fps, double exposure_us, double gain_db,
              gboolean auto_expose, int packet_size, int binning,
-             double tag_size_m, const AgCalibSource *calib_src)
+             double tag_size_m, const AgCalibSource *calib_src,
+             const char *output_dir, int record_layout,
+             gboolean record_layout_user_set)
 {
     GError *error = NULL;
     ArvCamera *camera = arv_camera_new (device_id, &error);
@@ -57,13 +65,15 @@ stream_loop (const char *device_id, const char *iface_ip,
     }
 
     ArvDevice *device = arv_camera_get_device (camera);
+    const gboolean is_mono = (cfg.sensor_mode == AG_SENSOR_MONO);
 
-    /* Compute display dimensions. */
-    guint src_sub_w  = cfg.frame_w / 2;
+    /* Compute display dimensions.  Stereo splits the incoming frame in
+     * half; mono uses it whole. */
+    guint src_sub_w  = is_mono ? cfg.frame_w : cfg.frame_w / 2;
     guint src_h      = cfg.frame_h;
     guint proc_sub_w = src_sub_w / (guint) cfg.software_binning;
     guint proc_h     = src_h     / (guint) cfg.software_binning;
-    guint display_w  = proc_sub_w * 2;
+    guint display_w  = is_mono ? proc_sub_w : proc_sub_w * 2;
     guint display_h  = proc_h;
 
 #ifdef HAVE_APRILTAG
@@ -78,8 +88,10 @@ stream_loop (const char *device_id, const char *iface_ip,
         ag_apriltag_estimate_intrinsics (proc_sub_w, proc_h,
                                          &at_fx, &at_fy, &at_cx, &at_cy);
 
-        tracker_left  = ag_tag_tracker_create ("left",  5.0, 0.01, 10);
-        tracker_right = ag_tag_tracker_create ("right", 5.0, 0.01, 10);
+        tracker_left  = ag_tag_tracker_create (is_mono ? "mono" : "left",
+                                                5.0, 0.01, 10);
+        if (!is_mono)
+            tracker_right = ag_tag_tracker_create ("right", 5.0, 0.01, 10);
 
         printf ("AprilTag: tagStandard52h13 + tagStandard41h12, "
                 "tag_size=%.3f m, fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n",
@@ -99,7 +111,7 @@ stream_loop (const char *device_id, const char *iface_ip,
     }
 
     SDL_Window *window = SDL_CreateWindow (
-        "Stereo Stream",
+        is_mono ? "Mono Stream" : "Stereo Stream",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         (int) display_w, (int) display_h,
         SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
@@ -140,19 +152,29 @@ stream_loop (const char *device_id, const char *iface_ip,
         return EXIT_FAILURE;
     }
 
-    /* Scratch buffers. */
+    /* Scratch buffers.  In mono mode the _right buffers stay NULL. */
     guint8 *rgb_left        = g_malloc ((size_t) proc_sub_w * proc_h * 3);
-    guint8 *rgb_right       = g_malloc ((size_t) proc_sub_w * proc_h * 3);
+    guint8 *rgb_right       = is_mono ? NULL :
+                              g_malloc ((size_t) proc_sub_w * proc_h * 3);
     guint8 *bayer_left      = g_malloc ((size_t) proc_sub_w * proc_h);
-    guint8 *bayer_right     = g_malloc ((size_t) proc_sub_w * proc_h);
+    guint8 *bayer_right     = is_mono ? NULL :
+                              g_malloc ((size_t) proc_sub_w * proc_h);
 
-    /* Load rectification remap tables (optional). */
+    /* Load rectification remap tables (optional, stereo only).  Mono
+     * single-camera undistortion would need a different calibration
+     * pipeline and is not currently implemented. */
     AgRemapTable *remap_left  = NULL;
     AgRemapTable *remap_right = NULL;
     guint8 *rect_left  = NULL;
     guint8 *rect_right = NULL;
 
     if (calib_src->local_path || calib_src->slot >= 0) {
+        if (is_mono) {
+            fprintf (stderr,
+                     "error: --calibration-local / --calibration-slot are "
+                     "stereo-only; not applicable to mono cameras\n");
+            goto cleanup;
+        }
         if (ag_calib_load (device, calib_src,
                             &remap_left, &remap_right, NULL) != 0)
             goto cleanup;
@@ -173,7 +195,38 @@ stream_loop (const char *device_id, const char *iface_ip,
 
     /* Pointers used for SDL upload — either raw or rectified. */
     const guint8 *display_left  = remap_left ? rect_left  : rgb_left;
-    const guint8 *display_right = remap_left ? rect_right : rgb_right;
+    const guint8 *display_right = is_mono ? NULL :
+                                  (remap_left ? rect_right : rgb_right);
+
+#ifdef HAVE_FFMPEG
+    /* Video recording.  Mono cameras force MONO layout regardless of
+     * --record-layout. */
+    AgVideoWriter *video_writer = NULL;
+    if (output_dir) {
+        time_t now = time (NULL);
+        struct tm *tm = localtime (&now);
+        char ts[32];
+        strftime (ts, sizeof ts, "%Y%m%d_%H%M%S", tm);
+        char mp4_path[1024];
+        snprintf (mp4_path, sizeof mp4_path, "%s/stream_%s.mp4",
+                  output_dir, ts);
+        AgVideoLayout layout = is_mono ? AG_VIDEO_LAYOUT_MONO
+                                       : (AgVideoLayout) record_layout;
+        if (is_mono && record_layout_user_set)
+            fprintf (stderr,
+                     "warning: --record-layout is stereo-only; using mono "
+                     "layout for this single-sensor camera\n");
+        video_writer = ag_video_writer_new (mp4_path, (int) proc_sub_w,
+                                             (int) proc_h, fps, layout);
+        if (!video_writer) {
+            fprintf (stderr, "warning: could not open video writer, "
+                     "continuing without recording\n");
+        }
+    }
+#else
+    (void) output_dir;
+    (void) record_layout;
+#endif
 
     /* Start acquisition. */
     printf ("Starting acquisition at %.1f Hz...\n", fps);
@@ -260,18 +313,26 @@ stream_loop (const char *device_id, const char *iface_ip,
         guint h = arv_buffer_get_image_height (buffer);
         size_t needed = (size_t) w * (size_t) h;
 
-        if (!data || data_size < needed || w % 2 != 0 ||
-            w != cfg.frame_w || h != cfg.frame_h) {
+        gboolean geom_ok = (w == cfg.frame_w && h == cfg.frame_h);
+        if (!is_mono && (w % 2 != 0))
+            geom_ok = FALSE;
+        if (!data || data_size < needed || !geom_ok) {
             frames_dropped++;
             arv_stream_push_buffer (cfg.stream, buffer);
             continue;
         }
 
-        extract_dual_bayer_eyes (data, w, h, cfg.software_binning,
-                                 bayer_left, bayer_right);
+        if (is_mono) {
+            /* Mono: copy the full Bayer/Mono frame directly. */
+            memcpy (bayer_left, data, (size_t) proc_sub_w * proc_h);
+        } else {
+            extract_dual_bayer_eyes (data, w, h, cfg.software_binning,
+                                     bayer_left, bayer_right);
+        }
 
 #ifdef HAVE_APRILTAG
-        /* Detect tags on raw grayscale (before gamma), both eyes. */
+        /* Detect tags on raw grayscale (before gamma).  Mono uses one
+         * detector; stereo runs both eyes through. */
         int n_left_tags = 0, n_right_tags = 0;
         AgTagOverlay left_tags[AG_MAX_TAG_OVERLAYS];
         AgTagOverlay right_tags[AG_MAX_TAG_OVERLAYS];
@@ -280,32 +341,37 @@ stream_loop (const char *device_id, const char *iface_ip,
                 at_ctx->detector, bayer_left,
                 proc_sub_w, proc_h, tag_size_m,
                 at_fx, at_fy, at_cx, at_cy,
-                total_frames, "left",
+                total_frames, is_mono ? "mono" : "left",
                 left_tags, AG_MAX_TAG_OVERLAYS, TRUE);
-            n_right_tags = ag_detect_tags_and_pose (
-                at_ctx->detector, bayer_right,
-                proc_sub_w, proc_h, tag_size_m,
-                at_fx, at_fy, at_cx, at_cy,
-                total_frames, "right",
-                right_tags, AG_MAX_TAG_OVERLAYS, TRUE);
-
             ag_tag_tracker_update (tracker_left,  left_tags,  n_left_tags,  total_frames);
-            ag_tag_tracker_update (tracker_right, right_tags, n_right_tags, total_frames);
             ag_tag_tracker_check_disappeared (tracker_left,  total_frames);
-            ag_tag_tracker_check_disappeared (tracker_right, total_frames);
+
+            if (!is_mono) {
+                n_right_tags = ag_detect_tags_and_pose (
+                    at_ctx->detector, bayer_right,
+                    proc_sub_w, proc_h, tag_size_m,
+                    at_fx, at_fy, at_cx, at_cy,
+                    total_frames, "right",
+                    right_tags, AG_MAX_TAG_OVERLAYS, TRUE);
+                ag_tag_tracker_update (tracker_right, right_tags, n_right_tags, total_frames);
+                ag_tag_tracker_check_disappeared (tracker_right, total_frames);
+            }
         }
 #endif
 
         size_t eye_n = (size_t) proc_sub_w * (size_t) proc_h;
         apply_lut_inplace (bayer_left,  eye_n, gamma_lut);
-        apply_lut_inplace (bayer_right, eye_n, gamma_lut);
+        if (!is_mono)
+            apply_lut_inplace (bayer_right, eye_n, gamma_lut);
 
         if (cfg.data_is_bayer) {
             debayer_rg8_to_rgb (bayer_left,  rgb_left,  proc_sub_w, proc_h);
-            debayer_rg8_to_rgb (bayer_right, rgb_right, proc_sub_w, proc_h);
+            if (!is_mono)
+                debayer_rg8_to_rgb (bayer_right, rgb_right, proc_sub_w, proc_h);
         } else {
             gray_to_rgb_replicate (bayer_left,  rgb_left,  (uint32_t) eye_n);
-            gray_to_rgb_replicate (bayer_right, rgb_right, (uint32_t) eye_n);
+            if (!is_mono)
+                gray_to_rgb_replicate (bayer_right, rgb_right, (uint32_t) eye_n);
         }
 
         if (remap_left) {
@@ -317,22 +383,50 @@ stream_loop (const char *device_id, const char *iface_ip,
         void *tex_pixels;
         int tex_pitch;
         if (SDL_LockTexture (texture, NULL, &tex_pixels, &tex_pitch) == 0) {
-            for (guint y = 0; y < proc_h; y++) {
-                guint8 *dst = (guint8 *) tex_pixels + (size_t) y * (size_t) tex_pitch;
-                memcpy (dst,
-                        display_left + (size_t) y * proc_sub_w * 3,
-                        proc_sub_w * 3);
-                memcpy (dst + proc_sub_w * 3,
-                        display_right + (size_t) y * proc_sub_w * 3,
-                        proc_sub_w * 3);
+            if (is_mono) {
+                for (guint y = 0; y < proc_h; y++) {
+                    guint8 *dst = (guint8 *) tex_pixels + (size_t) y * (size_t) tex_pitch;
+                    memcpy (dst,
+                            display_left + (size_t) y * proc_sub_w * 3,
+                            proc_sub_w * 3);
+                }
+            } else {
+                for (guint y = 0; y < proc_h; y++) {
+                    guint8 *dst = (guint8 *) tex_pixels + (size_t) y * (size_t) tex_pitch;
+                    memcpy (dst,
+                            display_left + (size_t) y * proc_sub_w * 3,
+                            proc_sub_w * 3);
+                    memcpy (dst + proc_sub_w * 3,
+                            display_right + (size_t) y * proc_sub_w * 3,
+                            proc_sub_w * 3);
+                }
             }
             SDL_UnlockTexture (texture);
         }
+
+#ifdef HAVE_FFMPEG
+        if (video_writer) {
+            if (is_mono)
+                ag_video_writer_add_mono_frame (video_writer, display_left);
+            else
+                ag_video_writer_add_frame (video_writer, display_left,
+                                            display_right);
+        }
+#endif
 
         arv_stream_push_buffer (cfg.stream, buffer);
 
         SDL_RenderClear (renderer);
         SDL_RenderCopy (renderer, texture, NULL, NULL);
+
+#ifdef HAVE_FFMPEG
+        /* REC indicator overlay. */
+        if (video_writer) {
+            int out_w, out_h;
+            SDL_GetRendererOutputSize (renderer, &out_w, &out_h);
+            ag_font_render (renderer, "REC", out_w - 60, 10, 2, 255, 40, 40);
+        }
+#endif
 
 #ifdef HAVE_APRILTAG
         /* Draw detected tag outlines as quadrilaterals with ID labels.
@@ -364,21 +458,23 @@ stream_loop (const char *device_id, const char *iface_ip,
                 ag_font_render (renderer, label, lx, ly, 2, 0, 255, 0);
             }
 
-            for (int t = 0; t < n_right_tags; t++) {
-                double x_off = (double) proc_sub_w;
-                for (int c = 0; c < 4; c++) {
-                    int nc = (c + 1) % 4;
-                    SDL_RenderDrawLine (renderer,
-                        (int) ((right_tags[t].p[c][0]  + x_off) * sx),
-                        (int) ( right_tags[t].p[c][1]           * sy),
-                        (int) ((right_tags[t].p[nc][0] + x_off) * sx),
-                        (int) ( right_tags[t].p[nc][1]          * sy));
+            if (!is_mono) {
+                for (int t = 0; t < n_right_tags; t++) {
+                    double x_off = (double) proc_sub_w;
+                    for (int c = 0; c < 4; c++) {
+                        int nc = (c + 1) % 4;
+                        SDL_RenderDrawLine (renderer,
+                            (int) ((right_tags[t].p[c][0]  + x_off) * sx),
+                            (int) ( right_tags[t].p[c][1]           * sy),
+                            (int) ((right_tags[t].p[nc][0] + x_off) * sx),
+                            (int) ( right_tags[t].p[nc][1]          * sy));
+                    }
+                    char label[16];
+                    snprintf (label, sizeof label, "%d", right_tags[t].id);
+                    int lx = (int) ((right_tags[t].center[0] + x_off) * sx);
+                    int ly = (int) (right_tags[t].center[1] * sy) - 16;
+                    ag_font_render (renderer, label, lx, ly, 2, 0, 255, 0);
                 }
-                char label[16];
-                snprintf (label, sizeof label, "%d", right_tags[t].id);
-                int lx = (int) ((right_tags[t].center[0] + x_off) * sx);
-                int ly = (int) (right_tags[t].center[1] * sy) - 16;
-                ag_font_render (renderer, label, lx, ly, 2, 0, 255, 0);
             }
         }
 #endif
@@ -404,6 +500,10 @@ stream_loop (const char *device_id, const char *iface_ip,
     g_timer_destroy (stats_timer);
     printf ("\nStopping...\n");
     arv_camera_stop_acquisition (camera, NULL);
+
+#ifdef HAVE_FFMPEG
+    ag_video_writer_close (video_writer);
+#endif
 
 cleanup:
     g_free (rect_left);
@@ -459,13 +559,17 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
                                             "rectify using on-camera calibration slot");
     struct arg_dbl *tag_size  = arg_dbl0 ("t", "tag-size",  "<meters>",
                                           "AprilTag size in meters (enables detection)");
+    struct arg_str *output    = arg_str0 ("o", "output",   "<dir>",
+                                          "record session to MP4 in <dir>");
+    struct arg_str *rec_layout = arg_str0 (NULL, "record-layout", "<sbs|tb|separate>",
+                                           "stereo layout for recording (default: sbs)");
     struct arg_lit *help      = arg_lit0 ("h", "help", "print this help");
     struct arg_end *end       = arg_end (10);
 
     void *argtable[] = { cmd, serial, address, interface, fps_a, exposure,
                          gain, auto_exp, binning_a, pkt_size,
                          calib_local, calib_slot,
-                         tag_size, help, end };
+                         tag_size, output, rec_layout, help, end };
 
     int exitcode = EXIT_SUCCESS;
     if (arg_nullcheck (argtable) != 0) {
@@ -559,6 +663,33 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
         printf ("Rectification enabled (calibration from camera slot %d).\n",
                 calib_src.slot);
 
+    /* Video recording options. */
+    const char *output_dir = output->count ? output->sval[0] : NULL;
+    int rl = 0;  /* AG_VIDEO_LAYOUT_SBS */
+#ifdef HAVE_FFMPEG
+    if (rec_layout->count) {
+        AgVideoLayout vl;
+        if (ag_video_layout_parse (rec_layout->sval[0], &vl) != 0) {
+            arg_dstr_catf (res, "error: unrecognised --record-layout '%s' "
+                           "(use sbs, tb, or separate)\n",
+                           rec_layout->sval[0]);
+            exitcode = EXIT_FAILURE;
+            goto done;
+        }
+        rl = (int) vl;
+    }
+    if (output_dir && !output->count) {
+        /* unreachable, but silences warning */
+    }
+#else
+    if (output_dir)
+        fprintf (stderr,
+                 "warning: -o/--output ignored (compiled without FFmpeg support)\n");
+    if (rec_layout->count)
+        fprintf (stderr,
+                 "warning: --record-layout ignored (compiled without FFmpeg support)\n");
+#endif
+
     double tag_size_m = 0.0;
 #ifdef HAVE_APRILTAG
     if (tag_size->count) {
@@ -593,7 +724,8 @@ cmd_stream (int argc, char *argv[], arg_dstr_t res, void *ctx)
 
     exitcode = stream_loop (device_id, iface_ip, fps, exposure_us, gain_db,
                             do_auto_expose, pkt_sz, binning, tag_size_m,
-                            &calib_src);
+                            &calib_src, output_dir, rl,
+                            rec_layout->count > 0);
     g_free (device_id);
 
 done:
