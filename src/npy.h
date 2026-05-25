@@ -11,6 +11,7 @@
 
 #include <glib.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
     int      ndim;

@@ -63,4 +63,26 @@ int write_dual_bayer_pair (const char *output_dir,
                            const void *left_tags, int n_left_tags,
                            const void *right_tags, int n_right_tags);
 
+/*
+ * Encode an already-split stereo pair.
+ *
+ * left and right must each be width*height bytes at the per-eye
+ * resolution (i.e. software binning has already been applied).  The
+ * function may mutate left/right in place (gamma LUT, etc.); callers
+ * that need to preserve the original data must copy first.
+ *
+ * Semantics for data_is_bayer, remap_left/right, and the tag overlays
+ * match write_dual_bayer_pair().
+ */
+int write_split_bayer_pair (const char *output_dir,
+                            const char *basename_no_ext,
+                            guint8 *left, guint8 *right,
+                            guint width, guint height,
+                            AgEncFormat enc,
+                            gboolean data_is_bayer,
+                            const AgRemapTable *remap_left,
+                            const AgRemapTable *remap_right,
+                            const void *left_tags, int n_left_tags,
+                            const void *right_tags, int n_right_tags);
+
 #endif /* AG_IMAGE_H */
