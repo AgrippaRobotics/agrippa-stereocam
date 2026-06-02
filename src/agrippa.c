@@ -33,10 +33,21 @@ struct AgCamera {
     ArvCamera     *camera;
     AgCameraConfig cfg;
 
-    /* Optional rectification tables, validated against the captured
-     * frame geometry but not applied to AgFrame data in this revision. */
+    /* Optional rectification tables loaded when calibration is configured. */
     AgRemapTable  *remap_left;
     AgRemapTable  *remap_right;
+
+    /* Intermediate debayer buffers (3 × eye_n_bytes, RGB).  Allocated only
+     * when remap tables are present and data_is_bayer is true.  The pipeline
+     * is: Bayer → debayer_rg8_to_rgb → left_rgb_buf → ag_remap_rgb →
+     * left_rect_buf, which preserves the Bayer CFA pattern alignment. */
+    guint8        *left_rgb_buf;
+    guint8        *right_rgb_buf;
+
+    /* Rectified output buffers returned via AgFrame.left/right.
+     * 3 × eye_n_bytes when data_is_bayer (RGB output), eye_n_bytes otherwise. */
+    guint8        *left_rect_buf;
+    guint8        *right_rect_buf;
 
     gboolean       continuous;
     gboolean       acquisition_running;
@@ -305,6 +316,18 @@ ag_camera_open (const AgOpenParams *params)
     if (cam->cfg.sensor_mode == AG_SENSOR_STEREO)
         cam->right_buf = g_malloc (cam->eye_n_bytes);
 
+    if (cam->remap_left) {
+        if (cam->cfg.data_is_bayer) {
+            cam->left_rgb_buf   = g_malloc (cam->eye_n_bytes * 3);
+            cam->right_rgb_buf  = g_malloc (cam->eye_n_bytes * 3);
+            cam->left_rect_buf  = g_malloc (cam->eye_n_bytes * 3);
+            cam->right_rect_buf = g_malloc (cam->eye_n_bytes * 3);
+        } else {
+            cam->left_rect_buf  = g_malloc (cam->eye_n_bytes);
+            cam->right_rect_buf = g_malloc (cam->eye_n_bytes);
+        }
+    }
+
     cam->auto_expose_requested = params->auto_expose ? TRUE : FALSE;
     cam->auto_expose_done      = FALSE;
 
@@ -380,8 +403,31 @@ ag_camera_capture (AgCamera *cam, AgFrame *out)
         extract_dual_bayer_eyes (data, width, height,
                                   cam->cfg.software_binning,
                                   cam->left_buf, cam->right_buf);
-        out->left  = cam->left_buf;
-        out->right = cam->right_buf;
+        if (cam->remap_left) {
+            if (cam->cfg.data_is_bayer) {
+                apply_lut_inplace (cam->left_buf,  cam->eye_n_bytes, gamma_lut_2p5 ());
+                apply_lut_inplace (cam->right_buf, cam->eye_n_bytes, gamma_lut_2p5 ());
+                debayer_rg8_to_rgb (cam->left_buf,  cam->left_rgb_buf,
+                                    cam->sub_w, cam->sub_h);
+                debayer_rg8_to_rgb (cam->right_buf, cam->right_rgb_buf,
+                                    cam->sub_w, cam->sub_h);
+                ag_remap_rgb (cam->remap_left,  cam->left_rgb_buf,  cam->left_rect_buf);
+                ag_remap_rgb (cam->remap_right, cam->right_rgb_buf, cam->right_rect_buf);
+                out->channels = 3;
+            } else {
+                apply_lut_inplace (cam->left_buf,  cam->eye_n_bytes, gamma_lut_2p5 ());
+                apply_lut_inplace (cam->right_buf, cam->eye_n_bytes, gamma_lut_2p5 ());
+                ag_remap_gray (cam->remap_left,  cam->left_buf,  cam->left_rect_buf);
+                ag_remap_gray (cam->remap_right, cam->right_buf, cam->right_rect_buf);
+                out->channels = 1;
+            }
+            out->left  = cam->left_rect_buf;
+            out->right = cam->right_rect_buf;
+        } else {
+            out->left     = cam->left_buf;
+            out->right    = cam->right_buf;
+            out->channels = 1;
+        }
     } else {
         if (width != cam->cfg.frame_w || height != cam->cfg.frame_h) {
             ag_set_error (cam, "unexpected frame %ux%u (expected %ux%u)",
@@ -395,8 +441,9 @@ ag_camera_capture (AgCamera *cam, AgFrame *out)
         } else {
             memcpy (cam->left_buf, data, cam->eye_n_bytes);
         }
-        out->left  = cam->left_buf;
-        out->right = NULL;
+        out->left     = cam->left_buf;
+        out->right    = NULL;
+        out->channels = 1;
     }
 
     out->width        = cam->sub_w;
@@ -438,6 +485,10 @@ ag_camera_close (AgCamera *cam)
 
     g_free (cam->left_buf);
     g_free (cam->right_buf);
+    g_free (cam->left_rgb_buf);
+    g_free (cam->right_rgb_buf);
+    g_free (cam->left_rect_buf);
+    g_free (cam->right_rect_buf);
 
     if (cam->cfg.stream)
         g_object_unref (cam->cfg.stream);

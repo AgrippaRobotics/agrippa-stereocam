@@ -64,7 +64,7 @@ ag_camera_close(cam);
 | `auto_expose` | When set to 1, runs auto-expose-and-lock at open time. Mutually exclusive with manual exposure / gain. |
 | `binning` | Sensor binning (1 or 2). |
 | `packet_size` | GigE packet size, or 0 to auto-negotiate. |
-| `calibration_local_path` / `calibration_slot` | Optional rectification source. Mutually exclusive; the loaded `AgRemapTable`s are accessible via `ag_camera_get_remap_left/right`. |
+| `calibration_local_path` / `calibration_slot` | Optional rectification source. Mutually exclusive. When set, remap tables are loaded at open time and applied automatically on every `ag_camera_capture()` call — `AgFrame.left`/`right` are returned already rectified (stereo-aligned). The tables are also accessible via `ag_camera_get_remap_left/right` for callers that need them directly. |
 | `continuous` | 1 (recommended) starts continuous acquisition once at open time and pays only the per-frame software-trigger cost on each `ag_camera_capture()`; 0 mimics `ag-cam-tools capture`'s SingleFrame behaviour and restarts acquisition every capture. |
 | `verbose` | Diagnostic prints during configuration. |
 
@@ -72,14 +72,15 @@ ag_camera_close(cam);
 
 | Field | Meaning |
 |-------|---------|
-| `left`, `right` | Per-eye Bayer planes. `right` is `NULL` for monocular Lucid cameras (BayerRG8 / Mono8). |
+| `left`, `right` | Per-eye image data. Without calibration: raw Bayer/gray `(H × W × 1)`. With calibration: debayered + rectified RGB24 `(H × W × 3)`. `right` is `NULL` for monocular cameras. |
 | `width`, `height` | Per-eye dimensions after software binning. |
+| `channels` | Bytes per pixel: `1` for raw Bayer/gray (no calibration), `3` for rectified RGB24 (calibration configured). |
 | `frame_id`, `timestamp_ns` | Camera-reported metadata. |
 
 ### Entry points
 
 - `ag_camera_open(const AgOpenParams *)` &mdash; opens the camera, configures it, and starts acquisition when `continuous=1`.
-- `ag_camera_capture(AgCamera *, AgFrame *)` &mdash; software-triggers a frame, splits DualBayerRG8 into per-eye planes, and returns 0 on success.
+- `ag_camera_capture(AgCamera *, AgFrame *)` &mdash; software-triggers a frame, splits DualBayerRG8 into per-eye planes, and returns 0 on success. When calibration is configured, applies the full rectification pipeline (gamma-correct → debayer → remap) and sets `AgFrame.channels = 3` (RGB24 output), matching the output of `ag-cam-tools capture --calibration-slot`. Without calibration, `AgFrame.channels = 1` (raw Bayer/gray).
 - `ag_camera_release_frame(AgCamera *, AgFrame *)` &mdash; no-op in this revision; reserved so a future zero-copy buffer hand-off can be added without an ABI break.
 - `ag_camera_close(AgCamera *)` &mdash; stops acquisition (if running), frees rectification tables, and tears down the camera handle. Does not call `arv_shutdown()` so subsequent opens keep their discovery cache warm.
 - `ag_camera_last_error(AgCamera *)` &mdash; last diagnostic string captured on this handle.
@@ -113,6 +114,3 @@ beyond the next capture must copy it. The Python wrapper in
   detector on the per-eye Bayer planes if they need it).
 - Zero-copy buffer hand-off; `ag_camera_capture` always copies the
   current Aravis buffer into the handle's scratch space.
-- Applying rectification inside the library; tables are loaded and
-  validated, but rectification is currently the caller's
-  responsibility via `ag_camera_get_remap_*`.

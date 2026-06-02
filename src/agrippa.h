@@ -52,7 +52,9 @@ typedef struct {
 
     /* Optional rectification: either a local calibration session path
      * or an on-camera slot index (0-2).  Set calibration_local_path to
-     * NULL and calibration_slot to -1 to skip. */
+     * NULL and calibration_slot to -1 to skip.  When set, remap tables
+     * are loaded at open time and applied automatically on every
+     * ag_camera_capture(), so AgFrame.left/right are already rectified. */
     const char *calibration_local_path;
     int         calibration_slot;
 
@@ -68,11 +70,16 @@ typedef struct {
 } AgOpenParams;
 
 typedef struct {
-    /* Raw Bayer planes for the captured frame.
+    /* Image data for the captured frame.
      *
-     * For stereo cameras (DualBayerRG8): left and right each point at
-     * a width*height single-eye plane, where width = sub-eye width
-     * after software binning and height = full frame height after
+     * When calibration was configured (calibration_local_path or
+     * calibration_slot), the pipeline is: gamma-correct → debayer → remap, and
+     * left/right contain interleaved RGB24 data (channels == 3).
+     * Without calibration, left/right hold raw Bayer or grayscale data
+     * (channels == 1).
+     *
+     * For stereo cameras (DualBayerRG8): left and right each point at a
+     * width*height*channels buffer, where width is the per-eye width after
      * software binning.
      *
      * For mono cameras (BayerRG8/Mono8): left points at the full
@@ -86,6 +93,10 @@ typedef struct {
     /* Per-eye buffer dimensions (post-binning). */
     unsigned int   width;
     unsigned int   height;
+
+    /* Bytes per pixel: 1 for raw Bayer/gray (no calibration), 3 for
+     * rectified RGB24 (calibration configured). */
+    unsigned int   channels;
 
     /* Camera-reported frame id and timestamp in nanoseconds. */
     unsigned long  frame_id;

@@ -105,8 +105,7 @@ capture_one_frame (const char *serial, const char *address,
                                      frame.left, frame.right,
                                      frame.width, frame.height, enc,
                                      ag_camera_data_is_bayer (cam) ? TRUE : FALSE,
-                                     ag_camera_get_remap_left  (cam),
-                                     ag_camera_get_remap_right (cam),
+                                     NULL, NULL,
                                      ov_left, n_ltags,
                                      ov_right, n_rtags);
     } else {
