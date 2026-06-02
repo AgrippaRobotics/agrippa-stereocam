@@ -74,6 +74,18 @@ int write_dual_bayer_pair (const char *output_dir,
  * Semantics for data_is_bayer, remap_left/right, and the tag overlays
  * match write_dual_bayer_pair().
  */
+/*
+ * Write a stereo pair from already-processed RGB24 data (e.g. the
+ * gamma-corrected, debayered, rectified planes returned by
+ * ag_camera_capture() when calibration is configured).
+ * left and right must each be width*height*3 bytes.
+ */
+int write_split_rgb_pair (const char *output_dir,
+                          const char *basename_no_ext,
+                          const guint8 *left, const guint8 *right,
+                          guint width, guint height,
+                          AgEncFormat enc);
+
 int write_split_bayer_pair (const char *output_dir,
                             const char *basename_no_ext,
                             guint8 *left, guint8 *right,

@@ -101,13 +101,21 @@ capture_one_frame (const char *serial, const char *address,
         (void) tag_size_m;
 #endif
 
-        rc = write_split_bayer_pair (output_dir, base,
-                                     frame.left, frame.right,
-                                     frame.width, frame.height, enc,
-                                     ag_camera_data_is_bayer (cam) ? TRUE : FALSE,
-                                     NULL, NULL,
-                                     ov_left, n_ltags,
-                                     ov_right, n_rtags);
+        if (frame.channels == 3) {
+            /* ag_camera_capture() already applied gamma, debayer, and
+             * rectification — write the RGB24 planes directly. */
+            rc = write_split_rgb_pair (output_dir, base,
+                                       frame.left, frame.right,
+                                       frame.width, frame.height, enc);
+        } else {
+            rc = write_split_bayer_pair (output_dir, base,
+                                         frame.left, frame.right,
+                                         frame.width, frame.height, enc,
+                                         ag_camera_data_is_bayer (cam) ? TRUE : FALSE,
+                                         NULL, NULL,
+                                         ov_left, n_ltags,
+                                         ov_right, n_rtags);
+        }
     } else {
 #ifdef HAVE_APRILTAG
         if (tag_size_m > 0.0) {
