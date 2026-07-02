@@ -6,8 +6,14 @@
  * Lucid cameras like the Triton TRT016S).  With --burst N, captures N
  * frames in rapid succession via FrameBurstStart triggering — burst is
  * currently stereo-only.
+ *
+ * The single-frame path is implemented on top of libagrippa
+ * (src/agrippa.[ch]) so the library is dogfooded by the CLI; the
+ * burst path retains its own pipeline because libagrippa does not yet
+ * expose FrameBurstStart triggering.
  */
 
+#include "agrippa.h"
 #include "common.h"
 #include "apriltag_detect.h"
 #include "burst.h"
@@ -22,321 +28,125 @@
 #include <time.h>
 
 static int
-capture_one_frame (const char *device_id, const char *output_dir,
-                   const char *iface_ip, AgEncFormat enc,
+capture_one_frame (const char *serial, const char *address,
+                   const char *interface_name, const char *output_dir,
+                   AgEncFormat enc,
                    double exposure_us, double gain_db,
                    gboolean auto_expose, int packet_size, int binning,
                    gboolean verbose,
                    const AgCalibSource *calib_src,
                    double tag_size_m)
 {
-    GError *error = NULL;
-    ArvCamera *camera = arv_camera_new (device_id, &error);
-    if (!camera) {
-        fprintf (stderr, "error: %s\n",
-                 error ? error->message : "failed to open device");
-        g_clear_error (&error);
-        arv_shutdown ();
+    AgOpenParams params = {
+        .address                = address,
+        .serial                 = serial,
+        .interface_name         = interface_name,
+        .exposure_us            = exposure_us,
+        .gain_db                = gain_db,
+        .auto_expose            = auto_expose ? 1 : 0,
+        .binning                = binning,
+        .packet_size            = packet_size,
+        .calibration_local_path = calib_src->local_path,
+        .calibration_slot       = calib_src->slot,
+        .continuous             = 0,
+        .verbose                = verbose ? 1 : 0,
+    };
+
+    AgCamera *cam = ag_camera_open (&params);
+    if (!cam)
+        return EXIT_FAILURE;
+
+    AgFrame frame;
+    if (ag_camera_capture (cam, &frame) != 0) {
+        fprintf (stderr, "error: %s\n", ag_camera_last_error (cam));
+        ag_camera_close (cam);
         return EXIT_FAILURE;
     }
 
-    printf ("Connected.\n");
+    time_t now = time (NULL);
+    struct tm tm_now;
+    localtime_r (&now, &tm_now);
+    char base[64];
+    strftime (base, sizeof base, "capture_%Y%m%d_%H%M%S", &tm_now);
 
-    AgCameraConfig cfg;
-    if (camera_configure (camera, AG_MODE_SINGLE_FRAME,
-                          binning, exposure_us, gain_db, auto_expose,
-                          packet_size, iface_ip, verbose, &cfg) != EXIT_SUCCESS) {
-        g_object_unref (camera);
-        arv_shutdown ();
-        return EXIT_FAILURE;
-    }
-
-    ArvDevice *device = arv_camera_get_device (camera);
-
-    /* Load rectification remap tables if calibration was requested.
-     * Rectification requires a stereo calibration pipeline; mono
-     * cameras have nothing meaningful to rectify here. */
-    AgRemapTable *remap_left  = NULL;
-    AgRemapTable *remap_right = NULL;
-
-    if (calib_src->local_path || calib_src->slot >= 0) {
-        if (cfg.sensor_mode == AG_SENSOR_MONO) {
-            fprintf (stderr,
-                     "error: --calibration-local / --calibration-slot are "
-                     "stereo-only; not applicable to mono cameras\n");
-            g_object_unref (cfg.stream);
-            g_object_unref (camera);
-            arv_shutdown ();
-            return EXIT_FAILURE;
-        }
-        if (ag_calib_load (device, calib_src,
-                            &remap_left, &remap_right, NULL) != 0) {
-            g_object_unref (cfg.stream);
-            g_object_unref (camera);
-            arv_shutdown ();
-            return EXIT_FAILURE;
-        }
-
-        /* Validate remap dimensions against processed frame size. */
-        guint proc_sub_w = (cfg.frame_w / 2) / (guint) cfg.software_binning;
-        guint proc_h     = cfg.frame_h / (guint) cfg.software_binning;
-        if (remap_left->width != proc_sub_w ||
-            remap_left->height != proc_h) {
-            fprintf (stderr,
-                     "error: remap dimensions %ux%u do not match frame %ux%u\n",
-                     remap_left->width, remap_left->height,
-                     proc_sub_w, proc_h);
-            ag_remap_table_free (remap_left);
-            ag_remap_table_free (remap_right);
-            g_object_unref (cfg.stream);
-            g_object_unref (camera);
-            arv_shutdown ();
-            return EXIT_FAILURE;
-        }
-
-        printf ("Rectification maps loaded (%ux%u).\n",
-                remap_left->width, remap_left->height);
-    }
-
-    printf ("Starting acquisition...\n");
-    arv_camera_start_acquisition (camera, &error);
-    if (error) {
-        fprintf (stderr, "error: failed to start acquisition: %s\n",
-                 error->message);
-        g_clear_error (&error);
-        g_object_unref (cfg.stream);
-        g_object_unref (camera);
-        arv_shutdown ();
-        return EXIT_FAILURE;
-    }
-
-    if (auto_expose)
-        auto_expose_settle (camera, &cfg, 100000.0);
-
-    /* Wait for TriggerArmed. */
-    {
-        gboolean armed = FALSE;
-        int polls = 0;
-        while (!armed && polls < 100) {
-            GError *e = NULL;
-            armed = arv_device_get_boolean_feature_value (device, "TriggerArmed", &e);
-            g_clear_error (&e);
-            if (!armed) {
-                g_usleep (10000);
-                polls++;
-            }
-        }
-        if (!armed)
-            fprintf (stderr, "warn: TriggerArmed not set after %d polls, "
-                     "triggering anyway\n", polls);
-        else
-            printf ("  TriggerArmed after %d poll(s)\n", polls);
-    }
-
-    /* Fire software trigger. */
-    {
-        GError *e = NULL;
-        arv_device_execute_command (device, "TriggerSoftware", &e);
-        if (e) {
-            fprintf (stderr, "error: TriggerSoftware failed: %s\n", e->message);
-            g_clear_error (&e);
-        } else {
-            printf ("  TriggerSoftware executed\n");
-        }
-    }
-
-    ArvBuffer *buffer = NULL;
-    ArvBuffer *partial_buf = NULL;
-
-    for (int i = 0; i < 10; i++) {
-        ArvBuffer *b = arv_stream_timeout_pop_buffer (cfg.stream, 5000000);
-        if (!b) {
-            printf ("  attempt %d: no buffer\n", i);
-            continue;
-        }
-        ArvBufferStatus st = arv_buffer_get_status (b);
-        if (st == ARV_BUFFER_STATUS_SUCCESS) {
-            if (partial_buf) {
-                arv_stream_push_buffer (cfg.stream, partial_buf);
-                partial_buf = NULL;
-            }
-            buffer = b;
-            break;
-        }
-
-        size_t bdata_sz = 0;
-        arv_buffer_get_data (b, &bdata_sz);
-        ArvBufferPayloadType bpt = arv_buffer_get_payload_type (b);
-        guint bw = 0, bh = 0;
-        if (bdata_sz > 0 &&
-            (bpt == ARV_BUFFER_PAYLOAD_TYPE_IMAGE ||
-             bpt == ARV_BUFFER_PAYLOAD_TYPE_EXTENDED_CHUNK_DATA)) {
-            bw = arv_buffer_get_image_width (b);
-            bh = arv_buffer_get_image_height (b);
-        }
-        printf ("  attempt %d: status=%d  payload=0x%x  frame_id=%" G_GUINT64_FORMAT
-                "  recv=%zu bytes  %ux%u\n",
-                i, (int) st, (unsigned) bpt,
-                arv_buffer_get_frame_id (b), bdata_sz, bw, bh);
-
-        if (partial_buf)
-            arv_stream_push_buffer (cfg.stream, partial_buf);
-        partial_buf = b;
-    }
-
-    if (!buffer) {
-        fprintf (stderr, "error: timeout waiting for frame\n");
-
-        /* Save partial data for debugging. */
-        if (partial_buf) {
-            size_t ps = 0;
-            const guint8 *pd = (const guint8 *) arv_buffer_get_data (partial_buf, &ps);
-            ArvBufferPayloadType ppt = arv_buffer_get_payload_type (partial_buf);
-            guint pw = 0, ph = 0;
-            if (ps > 0 &&
-                (ppt == ARV_BUFFER_PAYLOAD_TYPE_IMAGE ||
-                 ppt == ARV_BUFFER_PAYLOAD_TYPE_EXTENDED_CHUNK_DATA)) {
-                pw = arv_buffer_get_image_width (partial_buf);
-                ph = arv_buffer_get_image_height (partial_buf);
-            }
-            fprintf (stderr, "  partial frame: %ux%u  %zu bytes received\n", pw, ph, ps);
-            if (pd && pw > 0 && ph > 0 && ps >= (size_t) pw * ph) {
-                char *ppath = g_build_filename (output_dir, "partial_frame.pgm", NULL);
-                if (write_pgm (ppath, pd, pw, ph) == EXIT_SUCCESS)
-                    fprintf (stderr, "  partial frame saved -> %s\n", ppath);
-                g_free (ppath);
-            }
-            arv_stream_push_buffer (cfg.stream, partial_buf);
-        }
-
-        if (ARV_IS_GV_STREAM (cfg.stream)) {
-            guint64 n_completed = 0, n_failures = 0, n_underruns = 0;
-            arv_stream_get_statistics (cfg.stream, &n_completed, &n_failures, &n_underruns);
-            fprintf (stderr, "  stream stats: completed=%" G_GUINT64_FORMAT
-                     " failures=%" G_GUINT64_FORMAT
-                     " underruns=%" G_GUINT64_FORMAT "\n",
-                     n_completed, n_failures, n_underruns);
-
-            guint64 resent = 0, missing = 0;
-            arv_gv_stream_get_statistics (ARV_GV_STREAM (cfg.stream), &resent, &missing);
-            fprintf (stderr, "  gv stats:     resent=%" G_GUINT64_FORMAT
-                     " missing=%" G_GUINT64_FORMAT "\n", resent, missing);
-        }
-        arv_camera_stop_acquisition (camera, NULL);
-        g_object_unref (cfg.stream);
-        g_object_unref (camera);
-        arv_shutdown ();
-        return EXIT_FAILURE;
-    }
-
-    size_t data_size = 0;
-    const guint8 *data = arv_buffer_get_data (buffer, &data_size);
-    guint width  = arv_buffer_get_image_width (buffer);
-    guint height = arv_buffer_get_image_height (buffer);
-    size_t needed = (size_t) width * (size_t) height;
-
-    int rc = EXIT_FAILURE;
-    if (!data || data_size < needed) {
-        fprintf (stderr, "error: unsupported frame buffer size (%zu bytes for %ux%u)\n",
-                 data_size, width, height);
-    } else {
-        time_t now = time (NULL);
-        struct tm tm_now;
-        localtime_r (&now, &tm_now);
-        char base[64];
-        strftime (base, sizeof base, "capture_%Y%m%d_%H%M%S", &tm_now);
-
-        const char *pixel_format = arv_device_get_string_feature_value (
-                                       device, "PixelFormat", NULL);
-        if (pixel_format && strcmp (pixel_format, "DualBayerRG8") == 0) {
-            const void *ov_left = NULL, *ov_right = NULL;
-            int n_ltags = 0, n_rtags = 0;
+    int rc;
+    if (ag_camera_is_stereo (cam)) {
+        const void *ov_left = NULL, *ov_right = NULL;
+        int n_ltags = 0, n_rtags = 0;
 
 #ifdef HAVE_APRILTAG
-            AgTagOverlay left_ov[AG_MAX_TAG_OVERLAYS];
-            AgTagOverlay right_ov[AG_MAX_TAG_OVERLAYS];
-            if (tag_size_m > 0.0) {
-                guint sub_w = (width / 2) / (guint) cfg.software_binning;
-                guint sub_h = height / (guint) cfg.software_binning;
-                size_t eye_n = (size_t) sub_w * (size_t) sub_h;
-                guint8 *tag_left  = g_malloc (eye_n);
-                guint8 *tag_right = g_malloc (eye_n);
-                extract_dual_bayer_eyes (data, width, height,
-                                          cfg.software_binning,
-                                          tag_left, tag_right);
+        AgTagOverlay left_ov[AG_MAX_TAG_OVERLAYS];
+        AgTagOverlay right_ov[AG_MAX_TAG_OVERLAYS];
+        if (tag_size_m > 0.0) {
+            AgApriltagContext *at_ctx = ag_apriltag_create ();
+            double fx, fy, cx, cy;
+            ag_apriltag_estimate_intrinsics (frame.width, frame.height,
+                                             &fx, &fy, &cx, &cy);
 
-                AgApriltagContext *at_ctx = ag_apriltag_create ();
-                double fx, fy, cx, cy;
-                ag_apriltag_estimate_intrinsics (sub_w, sub_h,
-                                                 &fx, &fy, &cx, &cy);
+            n_ltags = ag_detect_tags_and_pose (at_ctx->detector,
+                         frame.left, frame.width, frame.height, tag_size_m,
+                         fx, fy, cx, cy, 0, "left",
+                         left_ov, AG_MAX_TAG_OVERLAYS, FALSE);
+            n_rtags = ag_detect_tags_and_pose (at_ctx->detector,
+                         frame.right, frame.width, frame.height, tag_size_m,
+                         fx, fy, cx, cy, 0, "right",
+                         right_ov, AG_MAX_TAG_OVERLAYS, FALSE);
 
-                n_ltags = ag_detect_tags_and_pose (at_ctx->detector,
-                             tag_left, sub_w, sub_h, tag_size_m,
-                             fx, fy, cx, cy, 0, "left",
-                             left_ov, AG_MAX_TAG_OVERLAYS, FALSE);
-                n_rtags = ag_detect_tags_and_pose (at_ctx->detector,
-                             tag_right, sub_w, sub_h, tag_size_m,
-                             fx, fy, cx, cy, 0, "right",
-                             right_ov, AG_MAX_TAG_OVERLAYS, FALSE);
+            ov_left  = left_ov;
+            ov_right = right_ov;
 
-                ov_left  = left_ov;
-                ov_right = right_ov;
-
-                ag_apriltag_destroy (at_ctx);
-                g_free (tag_left);
-                g_free (tag_right);
-            }
+            ag_apriltag_destroy (at_ctx);
+        }
 #else
-            (void) tag_size_m;
+        (void) tag_size_m;
 #endif
-            rc = write_dual_bayer_pair (output_dir, base, data, width, height,
-                                        enc, cfg.software_binning,
-                                        cfg.data_is_bayer,
-                                        remap_left, remap_right,
-                                        ov_left, n_ltags,
-                                        ov_right, n_rtags);
+
+        if (frame.channels == 3) {
+            /* ag_camera_capture() already applied gamma, debayer, and
+             * rectification — write the RGB24 planes directly. */
+            rc = write_split_rgb_pair (output_dir, base,
+                                       frame.left, frame.right,
+                                       frame.width, frame.height, enc);
         } else {
-#ifdef HAVE_APRILTAG
-            /* Mono path: optional tag detection.  Tags are logged via
-             * ag_detect_tags_and_pose; overlay rendering into the saved
-             * image is not yet implemented for mono. */
-            if (tag_size_m > 0.0) {
-                guint sub_w = width  / (guint) cfg.software_binning;
-                guint sub_h = height / (guint) cfg.software_binning;
-                AgApriltagContext *at_ctx = ag_apriltag_create ();
-                double fx, fy, cx, cy;
-                ag_apriltag_estimate_intrinsics (sub_w, sub_h,
-                                                 &fx, &fy, &cx, &cy);
-                AgTagOverlay tags[AG_MAX_TAG_OVERLAYS];
-                ag_detect_tags_and_pose (at_ctx->detector, data,
-                                         sub_w, sub_h, tag_size_m,
-                                         fx, fy, cx, cy, 0, "mono",
-                                         tags, AG_MAX_TAG_OVERLAYS, FALSE);
-                ag_apriltag_destroy (at_ctx);
-            }
-#endif
-            const char *ext = (enc == AG_ENC_PNG) ? "png"
-                            : (enc == AG_ENC_JPG) ? "jpg" : "pgm";
-            char *name = g_strdup_printf ("%s.%s", base, ext);
-            char *path = g_build_filename (output_dir, name, NULL);
-            if (enc == AG_ENC_PGM)
-                rc = write_pgm (path, data, width, height);
-            else
-                rc = write_color_image (enc, path, data, width, height);
-            printf ("Saved: %s  (%ux%u, %s)\n", path, width, height,
-                    pixel_format ? pixel_format : "?");
-            g_free (name);
-            g_free (path);
+            rc = write_split_bayer_pair (output_dir, base,
+                                         frame.left, frame.right,
+                                         frame.width, frame.height, enc,
+                                         ag_camera_data_is_bayer (cam) ? TRUE : FALSE,
+                                         NULL, NULL,
+                                         ov_left, n_ltags,
+                                         ov_right, n_rtags);
         }
+    } else {
+#ifdef HAVE_APRILTAG
+        if (tag_size_m > 0.0) {
+            AgApriltagContext *at_ctx = ag_apriltag_create ();
+            double fx, fy, cx, cy;
+            ag_apriltag_estimate_intrinsics (frame.width, frame.height,
+                                             &fx, &fy, &cx, &cy);
+            AgTagOverlay tags[AG_MAX_TAG_OVERLAYS];
+            ag_detect_tags_and_pose (at_ctx->detector, frame.left,
+                                     frame.width, frame.height, tag_size_m,
+                                     fx, fy, cx, cy, 0, "mono",
+                                     tags, AG_MAX_TAG_OVERLAYS, FALSE);
+            ag_apriltag_destroy (at_ctx);
+        }
+#endif
+        const char *ext = (enc == AG_ENC_PNG) ? "png"
+                        : (enc == AG_ENC_JPG) ? "jpg" : "pgm";
+        char *name = g_strdup_printf ("%s.%s", base, ext);
+        char *path = g_build_filename (output_dir, name, NULL);
+        if (enc == AG_ENC_PGM)
+            rc = write_pgm (path, frame.left, frame.width, frame.height);
+        else
+            rc = write_color_image (enc, path, frame.left,
+                                    frame.width, frame.height);
+        printf ("Saved: %s  (%ux%u)\n", path, frame.width, frame.height);
+        g_free (name);
+        g_free (path);
     }
 
-    arv_stream_push_buffer (cfg.stream, buffer);
-    arv_camera_stop_acquisition (camera, NULL);
-    ag_remap_table_free (remap_left);
-    ag_remap_table_free (remap_right);
-    g_object_unref (cfg.stream);
-    g_object_unref (camera);
-    arv_shutdown ();
+    ag_camera_release_frame (cam, &frame);
+    ag_camera_close (cam);
     return rc;
 }
 
@@ -679,12 +489,6 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
     const char *opt_interface = interface->count  ? interface->sval[0] : NULL;
     const char *opt_output    = output->sval[0];
 
-    const char *iface_ip = NULL;
-    if (opt_interface) {
-        iface_ip = setup_interface (opt_interface);
-        if (!iface_ip) { exitcode = EXIT_FAILURE; goto done; }
-    }
-
     if (g_mkdir_with_parents (opt_output, 0755) != 0) {
         arg_dstr_catf (res, "error: cannot create output directory '%s'\n",
                        opt_output);
@@ -692,25 +496,33 @@ cmd_capture (int argc, char *argv[], arg_dstr_t res, void *ctx)
         goto done;
     }
 
-    char *device_id = resolve_device (opt_serial, opt_address,
-                                       opt_interface, TRUE);
-    if (!device_id) { exitcode = EXIT_FAILURE; goto done; }
-
     int pkt_sz = pkt_size->count ? pkt_size->ival[0] : 0;
 
-    if (burst_count > 0)
+    if (burst_count > 0) {
+        /* Burst path still resolves the device itself and uses raw
+         * Aravis APIs — libagrippa does not yet support FrameBurstStart. */
+        const char *iface_ip = NULL;
+        if (opt_interface) {
+            iface_ip = setup_interface (opt_interface);
+            if (!iface_ip) { exitcode = EXIT_FAILURE; goto done; }
+        }
+        char *device_id = resolve_device (opt_serial, opt_address,
+                                           opt_interface, TRUE);
+        if (!device_id) { exitcode = EXIT_FAILURE; goto done; }
         exitcode = capture_burst_frames (device_id, opt_output, iface_ip,
                                           enc, exposure_us, gain_db,
                                           do_auto_expose, pkt_sz, binning,
                                           verbose->count > 0,
                                           &calib_src, burst_count,
                                           tag_size_m);
-    else
-        exitcode = capture_one_frame (device_id, opt_output, iface_ip, enc,
+        g_free (device_id);
+    } else {
+        exitcode = capture_one_frame (opt_serial, opt_address, opt_interface,
+                                       opt_output, enc,
                                        exposure_us, gain_db, do_auto_expose,
                                        pkt_sz, binning, verbose->count > 0,
                                        &calib_src, tag_size_m);
-    g_free (device_id);
+    }
 
 done:
     arg_freetable (argtable, sizeof argtable / sizeof argtable[0]);

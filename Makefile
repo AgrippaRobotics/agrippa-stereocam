@@ -4,7 +4,7 @@ CXX     ?= g++
 # layout in common.h) trigger rebuilds of every .c that includes them.
 # Without this, callers compiled against a stale struct size produced
 # silent stack overflows when AgCameraConfig grew.
-CFLAGS  = -Wall -Wextra -O2 -MMD -MP \
+CFLAGS  = -Wall -Wextra -O2 -fPIC -MMD -MP \
           $(shell pkg-config --cflags aravis-0.8) \
           $(shell pkg-config --cflags sdl2)
 LIBS    = $(shell pkg-config --libs aravis-0.8) \
@@ -16,6 +16,7 @@ BINDIR    = bin
 VENDORDIR = vendor
 
 TARGET = $(BINDIR)/ag-cam-tools
+LIB_TARGET = $(BINDIR)/libagrippa.so
 
 SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/common.c \
@@ -45,7 +46,8 @@ SRCS = $(SRCDIR)/main.c \
        $(SRCDIR)/cmd_bounce.c \
        $(SRCDIR)/burst.c \
        $(SRCDIR)/apriltag_detect.c \
-       $(SRCDIR)/overlay.c
+       $(SRCDIR)/overlay.c \
+       $(SRCDIR)/agrippa.c
 
 VENDOR_SRCS = $(VENDORDIR)/argtable3.c \
               $(VENDORDIR)/cJSON.c
@@ -55,6 +57,12 @@ CXX_SRCS =
 OBJS        = $(patsubst $(SRCDIR)/%.c,$(BINDIR)/%.o,$(SRCS))
 VENDOR_OBJS = $(patsubst $(VENDORDIR)/%.c,$(BINDIR)/%.o,$(VENDOR_SRCS))
 CXX_OBJS    = $(patsubst $(SRCDIR)/%.cpp,$(BINDIR)/%.o,$(CXX_SRCS))
+
+# Objects that go into libagrippa.so: everything except the CLI
+# entry point (main.o) and the argtable-driven cmd_*.o handlers.
+# These are pulled in transitively only by ag-cam-tools.
+LIB_OBJS    = $(filter-out $(BINDIR)/main.o $(BINDIR)/cmd_%.o,$(OBJS)) \
+              $(VENDOR_OBJS) $(CXX_OBJS)
 
 # --- AprilTag: prefer system install, fall back to vendor submodule ---
 APRILTAG_SYSTEM_CFLAGS := $(shell pkg-config --cflags apriltag 2>/dev/null)
@@ -121,12 +129,16 @@ ifneq ($(FFMPEG_LIBS),)
 endif
 
 PREFIX     ?= /usr/local
+LIBDIR     ?= $(PREFIX)/lib
+INCLUDEDIR ?= $(PREFIX)/include
 BASHCOMPDIR ?= $(PREFIX)/share/bash-completion/completions
 ZSHCOMPDIR  ?= $(PREFIX)/share/zsh/site-functions
 
-.PHONY: all clean install uninstall test test-hw test-all
+.PHONY: all clean install uninstall test test-hw test-all lib
 
-all: $(BINDIR) $(TARGET)
+all: $(BINDIR) $(TARGET) $(LIB_TARGET)
+
+lib: $(BINDIR) $(LIB_TARGET)
 
 $(BINDIR):
 	mkdir -p $(BINDIR)
@@ -139,15 +151,16 @@ $(BINDIR)/%.o: $(SRCDIR)/%.cpp | $(BINDIR)
 	$(CXX) $(CFLAGS) -std=c++11 -c -o $@ $<
 
 $(BINDIR)/argtable3.o: $(VENDORDIR)/argtable3.c | $(BINDIR)
-	$(CC) -Wall -O2 -c -o $@ $<
+	$(CC) -Wall -O2 -fPIC -c -o $@ $<
 
 $(BINDIR)/cJSON.o: $(VENDORDIR)/cJSON.c | $(BINDIR)
-	$(CC) -Wall -O2 -c -o $@ $<
+	$(CC) -Wall -O2 -fPIC -c -o $@ $<
 
-# AprilTag vendor object compilation
+# AprilTag vendor object compilation.  -fPIC is required so the vendored
+# static library can be linked into libagrippa.so.
 $(BINDIR)/apriltag/%.o: $(APRILTAG_DIR)/%.c | $(BINDIR)
 	@mkdir -p $(dir $@)
-	$(CC) -Wall -O2 -I$(APRILTAG_DIR) -c -o $@ $<
+	$(CC) -Wall -O2 -fPIC -I$(APRILTAG_DIR) -c -o $@ $<
 
 # AprilTag vendor static library
 $(APRILTAG_LIB): $(APRILTAG_OBJS)
@@ -157,13 +170,22 @@ $(TARGET): $(OBJS) $(VENDOR_OBJS) $(CXX_OBJS) $(APRILTAG_LIB)
 	$(CC) -o $@ $(OBJS) $(VENDOR_OBJS) $(CXX_OBJS) $(if $(APRILTAG_LIB),-L$(BINDIR) -lapriltag) $(LIBS)
 	codesign --force --sign - $@ 2>/dev/null || true
 
+$(LIB_TARGET): $(LIB_OBJS) $(APRILTAG_LIB)
+	$(CC) -shared -Wl,-soname,libagrippa.so -o $@ $(LIB_OBJS) \
+	      $(if $(APRILTAG_LIB),-L$(BINDIR) -lapriltag) $(LIBS)
+	codesign --force --sign - $@ 2>/dev/null || true
+
 # Pull in header-dependency files emitted by -MMD/-MP.  Missing files
 # (first build) are ignored thanks to the leading dash.
 -include $(OBJS:.o=.d) $(VENDOR_OBJS:.o=.d) $(CXX_OBJS:.o=.d)
 
-install: $(TARGET)
+install: $(TARGET) $(LIB_TARGET)
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/
+	install -d $(DESTDIR)$(LIBDIR)
+	install -m 755 $(LIB_TARGET) $(DESTDIR)$(LIBDIR)/
+	install -d $(DESTDIR)$(INCLUDEDIR)/agrippa
+	install -m 644 $(SRCDIR)/agrippa.h $(DESTDIR)$(INCLUDEDIR)/agrippa/
 	install -d $(DESTDIR)$(BASHCOMPDIR)
 	install -m 644 completions/ag-cam-tools.bash $(DESTDIR)$(BASHCOMPDIR)/ag-cam-tools
 	install -d $(DESTDIR)$(ZSHCOMPDIR)
@@ -171,6 +193,8 @@ install: $(TARGET)
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/ag-cam-tools
+	rm -f $(DESTDIR)$(LIBDIR)/libagrippa.so
+	rm -rf $(DESTDIR)$(INCLUDEDIR)/agrippa
 	rm -f $(DESTDIR)$(BASHCOMPDIR)/ag-cam-tools
 	rm -f $(DESTDIR)$(ZSHCOMPDIR)/_ag-cam-tools
 

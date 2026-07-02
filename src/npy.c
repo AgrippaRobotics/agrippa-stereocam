@@ -2,6 +2,7 @@
  * npy.c — minimal NumPy .npy v1.0 parser for float64 arrays
  */
 
+#define _GNU_SOURCE
 #include "npy.h"
 
 #include <stdio.h>

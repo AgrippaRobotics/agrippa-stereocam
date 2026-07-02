@@ -40,3 +40,4 @@ nav:
       - Circuits: hardware/circuits.md
   - Development:
       - Binning and Bayer Notes: development/binning-and-bayer.md
+      - libagrippa C API: development/library-api.md
