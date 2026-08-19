@@ -1,6 +1,6 @@
 /* aprilgrid.cpp — see aprilgrid.hpp. */
 
-#ifdef HAVE_OPENCV
+#ifdef HAVE_OPENCV_CALIB
 
 #include "aprilgrid.hpp"
 
@@ -428,4 +428,4 @@ ag_grid_detect (const cv::Mat &gray, const AgGridSpec &spec)
     return out;
 }
 
-#endif /* HAVE_OPENCV */
+#endif /* HAVE_OPENCV_CALIB */

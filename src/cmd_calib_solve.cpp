@@ -5,7 +5,7 @@
  * will want it in-process) without dragging in argument parsing.
  */
 
-#ifdef HAVE_OPENCV
+#ifdef HAVE_OPENCV_CALIB
 
 #include "calib_solve.hpp"
 
@@ -54,4 +54,4 @@ cmd_calib_solve (int argc, char *argv[], arg_dstr_t res, void *ctx)
     return ag_calib_solve (session, out, o) == 0 ? 0 : 1;
 }
 
-#endif /* HAVE_OPENCV */
+#endif /* HAVE_OPENCV_CALIB */

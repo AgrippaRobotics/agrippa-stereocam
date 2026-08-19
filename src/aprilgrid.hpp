@@ -8,7 +8,7 @@
  * because the ones a plain pass drops are the oblique, dim, frame-edge tags that carry
  * most of the distortion signal.
  *
- * Needs only OpenCV core+imgproc+calib3d (guarded by HAVE_OPENCV), plus libapriltag's
+ * Needs only OpenCV core+imgproc+calib3d (guarded by HAVE_OPENCV_CALIB), plus libapriltag's
  * tag36h11 code table -- which is already vendored, and which the b2 family leaves
  * untouched (verified: 0 of 587 codes differ, so stock and b2 are the same table).
  * Deliberately no ArUco: it would do the seed pass, but on the OpenCV that Ubuntu
@@ -29,7 +29,7 @@
 #ifndef AG_APRILGRID_HPP
 #define AG_APRILGRID_HPP
 
-#ifdef HAVE_OPENCV
+#ifdef HAVE_OPENCV_CALIB
 
 #include <map>
 #include <set>
@@ -79,5 +79,5 @@ double ag_grid_pick_orientation (const AgGridSpec &spec,
  * with per-tag verification. `gray` is 8-bit single channel. */
 AgGridDetection ag_grid_detect (const cv::Mat &gray, const AgGridSpec &spec);
 
-#endif /* HAVE_OPENCV */
+#endif /* HAVE_OPENCV_CALIB */
 #endif /* AG_APRILGRID_HPP */

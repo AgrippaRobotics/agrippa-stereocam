@@ -1,6 +1,6 @@
 /* calib_solve.cpp — see calib_solve.hpp. */
 
-#ifdef HAVE_OPENCV
+#ifdef HAVE_OPENCV_CALIB
 
 #include "calib_solve.hpp"
 
@@ -629,4 +629,4 @@ ag_calib_solve (const std::string &session_dir, const std::string &out_dir_in,
     return 0;
 }
 
-#endif /* HAVE_OPENCV */
+#endif /* HAVE_OPENCV_CALIB */

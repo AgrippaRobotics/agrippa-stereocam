@@ -11,13 +11,13 @@
  * has no dtype parameter.
  *
  * Ported from makeit-operate's makeit_operate/calibration/solve_stereo.py. OpenCV-only
- * (HAVE_OPENCV), same as the grid detector it sits on.
+ * (HAVE_OPENCV_CALIB), same as the grid detector it sits on.
  */
 
 #ifndef AG_CALIB_SOLVE_HPP
 #define AG_CALIB_SOLVE_HPP
 
-#ifdef HAVE_OPENCV
+#ifdef HAVE_OPENCV_CALIB
 
 #include <string>
 #include "aprilgrid.hpp"
@@ -38,5 +38,5 @@ struct AgCalibSolveOpts {
 int ag_calib_solve (const std::string &session_dir, const std::string &out_dir,
                     const AgCalibSolveOpts &opts);
 
-#endif /* HAVE_OPENCV */
+#endif /* HAVE_OPENCV_CALIB */
 #endif /* AG_CALIB_SOLVE_HPP */
