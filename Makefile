@@ -82,8 +82,7 @@ else ifneq ($(wildcard $(VENDORDIR)/apriltag/apriltag.h),)
   APRILTAG_SRCS = $(APRILTAG_DIR)/apriltag.c \
                   $(APRILTAG_DIR)/apriltag_quad_thresh.c \
                   $(APRILTAG_DIR)/apriltag_pose.c \
-                  $(APRILTAG_DIR)/tagStandard52h13.c \
-                  $(APRILTAG_DIR)/tagStandard41h12.c \
+                  $(wildcard $(APRILTAG_DIR)/tag*.c) \
                   $(wildcard $(APRILTAG_DIR)/common/*.c)
   APRILTAG_OBJS = $(patsubst $(APRILTAG_DIR)/%.c,$(BINDIR)/apriltag/%.o,$(APRILTAG_SRCS))
 endif
@@ -93,12 +92,28 @@ OPENCV_CFLAGS := $(shell pkg-config --cflags opencv4 2>/dev/null)
 OPENCV_LIBS   := $(shell pkg-config --libs   opencv4 2>/dev/null)
 
 ifneq ($(OPENCV_LIBS),)
-  CFLAGS   += $(OPENCV_CFLAGS) -DHAVE_OPENCV=1
-  LIBS     += $(OPENCV_LIBS)
-  CXX_SRCS += $(SRCDIR)/stereo_sgbm.cpp
+  LIBS     += $(OPENCV_LIBS) -lstdc++
+
+  # calib-solve needs only core+imgproc+calib3d, which distros package plainly:
+  # 3 packages, +11 MB, no contrib.
+  CFLAGS   += $(OPENCV_CFLAGS) -DHAVE_OPENCV_CALIB=1
+  CXX_SRCS += $(SRCDIR)/aprilgrid.cpp
+  CXX_SRCS += $(SRCDIR)/calib_solve.cpp
+  CXX_SRCS += $(SRCDIR)/cmd_calib_solve.cpp
+
+  # StereoSGBM's WLS filter needs cv::ximgproc, which lives in opencv_contrib -- a
+  # far bigger ask than the solver's three modules (on Ubuntu 22.04 contrib drags
+  # GDAL, GTK-3, x265 and GDCM: 279 packages, +314 MB). Gate the depth backend on
+  # the header actually being there, so an OpenCV without contrib still builds and
+  # still gets calib-solve. HAVE_OPENCV keeps its existing meaning throughout
+  # stereo_common.c / stereo.h / cmd_depth_preview.c: the SGBM backend.
+  OPENCV_INC := $(firstword $(patsubst -I%,%,$(filter -I%,$(OPENCV_CFLAGS))))
+  ifneq ($(wildcard $(OPENCV_INC)/opencv2/ximgproc/disparity_filter.hpp),)
+    CFLAGS   += -DHAVE_OPENCV=1
+    CXX_SRCS += $(SRCDIR)/stereo_sgbm.cpp
+  endif
+
   CXX_OBJS  = $(patsubst $(SRCDIR)/%.cpp,$(BINDIR)/%.o,$(CXX_SRCS))
-  # C++ standard library required when linking a mixed C/C++ binary
-  LIBS     += -lstdc++
 endif
 
 # --- ONNX Runtime: optional, provides in-process neural stereo backend ---

@@ -2,7 +2,13 @@
  * npy.c — minimal NumPy .npy v1.0 parser for float64 arrays
  */
 
+/* memmem() is a GNU extension. BSD/macOS declares it in <string.h> unconditionally,
+ * glibc only under _GNU_SOURCE -- without which gcc implicitly declares it as
+ * returning int and truncates the pointer on 64-bit. Must precede every include. */
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+
 #include "npy.h"
 
 #include <stdio.h>
@@ -145,5 +151,74 @@ ag_npy_load (const uint8_t *buf, size_t len, AgNpyArray *out)
     for (int i = 0; i < ndim; i++)
         out->shape[i] = shape[i];
 
+    return 0;
+}
+
+/*
+ * Emit the ASCII header dict numpy itself writes, then the raw doubles.
+ *
+ * v1.0 requires the header be padded so that magic(6) + version(2) + len(2) + header
+ * is a multiple of 64, and that it end in '\n'. numpy also emits a trailing ", " before
+ * the closing brace and renders a 1-D shape as "(5,)" -- matched here so a file written
+ * by this and one written by numpy.save are byte-identical for the same array.
+ */
+int
+ag_npy_save (const char *path, const double *data, int ndim, const int *shape)
+{
+    if (!path || !data || !shape || ndim < 1 || ndim > 4) {
+        fprintf (stderr, "npy: bad arguments to ag_npy_save\n");
+        return -1;
+    }
+
+    char dims[64];
+    int  n = 0;
+    size_t count = 1;
+    for (int i = 0; i < ndim; i++) {
+        if (shape[i] < 0) {
+            fprintf (stderr, "npy: negative dimension %d\n", shape[i]);
+            return -1;
+        }
+        count *= (size_t) shape[i];
+        n += snprintf (dims + n, sizeof dims - (size_t) n, "%s%d",
+                       i ? ", " : "", shape[i]);
+        if (n < 0 || (size_t) n >= sizeof dims)
+            return -1;
+    }
+    if (ndim == 1)      /* numpy writes 1-D shapes as "(5,)" */
+        n += snprintf (dims + n, sizeof dims - (size_t) n, ",");
+
+    char header[256];
+    int hlen = snprintf (header, sizeof header,
+                         "{'descr': '<f8', 'fortran_order': False, 'shape': (%s), }", dims);
+    if (hlen < 0 || (size_t) hlen >= sizeof header)
+        return -1;
+
+    /* Pad with spaces so the whole preamble is 64-byte aligned, then newline. */
+    const int preamble = (int) sizeof k_npy_magic + 2;          /* magic+version, len field */
+    int total = preamble + hlen + 1;
+    int pad = (64 - (total % 64)) % 64;
+    if (hlen + pad + 1 >= (int) sizeof header)
+        return -1;
+    memset (header + hlen, ' ', (size_t) pad);
+    header[hlen + pad] = '\n';
+    const uint16_t header_len = (uint16_t) (hlen + pad + 1);
+
+    FILE *f = fopen (path, "wb");
+    if (!f) {
+        fprintf (stderr, "npy: cannot write %s\n", path);
+        return -1;
+    }
+    const uint8_t lenbytes[2] = { (uint8_t) (header_len & 0xff),
+                                  (uint8_t) (header_len >> 8) };   /* little-endian */
+    int ok = fwrite (k_npy_magic, 1, sizeof k_npy_magic, f) == sizeof k_npy_magic
+          && fwrite (lenbytes, 1, 2, f) == 2
+          && fwrite (header, 1, header_len, f) == header_len
+          && (count == 0 || fwrite (data, sizeof (double), count, f) == count);
+    if (fclose (f) != 0)
+        ok = 0;
+    if (!ok) {
+        fprintf (stderr, "npy: short write to %s\n", path);
+        return -1;
+    }
     return 0;
 }

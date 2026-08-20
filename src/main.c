@@ -20,6 +20,9 @@ int cmd_depth_preview_neural (int argc, char *argv[], arg_dstr_t res, void *ctx)
 int cmd_calibration_stash (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_depth_capture (int argc, char *argv[], arg_dstr_t res, void *ctx);
 int cmd_bounce (int argc, char *argv[], arg_dstr_t res, void *ctx);
+#ifdef HAVE_OPENCV_CALIB
+int cmd_calib_solve (int argc, char *argv[], arg_dstr_t res, void *ctx);
+#endif
 
 static void
 print_usage (void)
@@ -46,6 +49,10 @@ print_usage (void)
             "  depth-capture\n"
             "            Capture RGBA depth map (RGB + depth alpha)\n"
             "  bounce    Reset (power-cycle) the camera over GigE\n"
+#ifdef HAVE_OPENCV_CALIB
+            "  calib-solve\n"
+            "            Solve stereo + hand-eye from a captured sweep\n"
+#endif
             "\n"
             "Run 'ag-cam-tools <command> --help' for command-specific options.\n");
 }
@@ -79,6 +86,10 @@ main (int argc, char *argv[])
                       "Capture RGBA depth map (RGB + depth alpha)", NULL);
     arg_cmd_register ("bounce", cmd_bounce,
                       "Reset (power-cycle) the camera over GigE", NULL);
+#ifdef HAVE_OPENCV_CALIB
+    arg_cmd_register ("calib-solve", cmd_calib_solve,
+                      "Solve stereo + hand-eye from a captured sweep", NULL);
+#endif
 
     if (argc < 2 ||
         strcmp (argv[1], "--help") == 0 ||
