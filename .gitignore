@@ -27,3 +27,14 @@ site/
 
 # Scratch images
 *.png
+
+# Capture and preview artefacts. `stream`, `depth-preview` and `capture` write these
+# into the working directory by default, so they accumulate during any bench session
+# and are easy to commit by accident. Ignored, not deleted.
+*.mp4
+*.pgm
+depth_preview_*
+stream_*
+capture_*
+inspection_demo/
+tending_captures/
