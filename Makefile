@@ -96,6 +96,8 @@ ifneq ($(OPENCV_LIBS),)
   LIBS     += $(OPENCV_LIBS)
   CXX_SRCS += $(SRCDIR)/stereo_sgbm.cpp
   CXX_SRCS += $(SRCDIR)/aprilgrid.cpp
+  CXX_SRCS += $(SRCDIR)/calib_solve.cpp
+  CXX_SRCS += $(SRCDIR)/cmd_calib_solve.cpp
   CXX_OBJS  = $(patsubst $(SRCDIR)/%.cpp,$(BINDIR)/%.o,$(CXX_SRCS))
   # C++ standard library required when linking a mixed C/C++ binary
   LIBS     += -lstdc++
