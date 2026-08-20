@@ -82,8 +82,7 @@ else ifneq ($(wildcard $(VENDORDIR)/apriltag/apriltag.h),)
   APRILTAG_SRCS = $(APRILTAG_DIR)/apriltag.c \
                   $(APRILTAG_DIR)/apriltag_quad_thresh.c \
                   $(APRILTAG_DIR)/apriltag_pose.c \
-                  $(APRILTAG_DIR)/tagStandard52h13.c \
-                  $(APRILTAG_DIR)/tagStandard41h12.c \
+                  $(wildcard $(APRILTAG_DIR)/tag*.c) \
                   $(wildcard $(APRILTAG_DIR)/common/*.c)
   APRILTAG_OBJS = $(patsubst $(APRILTAG_DIR)/%.c,$(BINDIR)/apriltag/%.o,$(APRILTAG_SRCS))
 endif
