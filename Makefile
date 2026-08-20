@@ -95,6 +95,7 @@ ifneq ($(OPENCV_LIBS),)
   CFLAGS   += $(OPENCV_CFLAGS) -DHAVE_OPENCV=1
   LIBS     += $(OPENCV_LIBS)
   CXX_SRCS += $(SRCDIR)/stereo_sgbm.cpp
+  CXX_SRCS += $(SRCDIR)/aprilgrid.cpp
   CXX_OBJS  = $(patsubst $(SRCDIR)/%.cpp,$(BINDIR)/%.o,$(CXX_SRCS))
   # C++ standard library required when linking a mixed C/C++ binary
   LIBS     += -lstdc++
